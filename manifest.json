@@ -1,0 +1,13 @@
+{
+  "name": "Sprout",
+  "short_name": "Sprout",
+  "description": "A gamified habit tracker: your real-life discipline builds up a little property, car, and security in a 3D world.",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#0D1117",
+  "theme_color": "#0D1117",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
