@@ -770,10 +770,16 @@ function tick(){
 /* ---- input ---- */
 function bindControls(){
   const cv=document.getElementById('cv');
-  // hard-block page scroll/bounce during any touch interaction with the world
+  // hard-block page scroll/bounce during any touch interaction with the 3D canvas.
+  // Scoped to the canvas itself (not "is #game visible") — #game stays display:block
+  // under every sheet/HUD button once the player has entered the world, so guarding
+  // on visibility alone swallowed preventDefault (and with it, the browser's
+  // synthesized click) for every touch anywhere on screen, including taps on the
+  // LOG/STATS/MENU buttons and every row inside an open sheet. On a touchscreen this
+  // made logging habits — and everything else — completely unresponsive once in-game.
   ['touchstart','touchmove','touchend'].forEach(evt=>{
     document.addEventListener(evt, e=>{
-      if(document.getElementById('game').style.display==='block') e.preventDefault();
+      if(e.target===cv) e.preventDefault();
     }, {passive:false});
   });
   cv.addEventListener('pointerdown',e=>{ drag.down=true; drag.moved=false; drag.id=e.pointerId; drag.x=e.clientX; drag.y=e.clientY; drag.t=Date.now(); });
