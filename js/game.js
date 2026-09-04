@@ -6,6 +6,11 @@ let running=false,nightMode=false,interactTarget=null,raf=null;
 let moveTarget=null,pendingSpot=null;
 let drag={down:false,moved:false,x:0,y:0,t:0,id:null};
 
+/* 'walk' (default) or 'drive' — see enterDriveMode()/exitDriveMode() */
+let controlMode='walk';
+let driveTarget=null, carYaw=0, carTargetYaw=0;
+const CAR_SPEED=14, CAR_TURN_RATE=4;
+
 /* ---- shader: anime cel + rim ---- */
 /* ---- toon shading via three.js's built-in MeshToonMaterial ----
    No custom GLSL anywhere in this file. A hand-written shader that fails to
@@ -189,21 +194,21 @@ function makeCar(){
 /* ---- world ---- */
 function physiqueLocal(){ const s=workoutStreak(); return s>=60?1:s>=30?.75:s>=10?.48:.22; }
 
-function buildWorld(){
-  scene=new THREE.Scene();
-  const sky=nightMode?0x0E1524:0x8FC3DE;
-  scene.background=new THREE.Color(sky);
-  scene.fog=new THREE.Fog(sky,30,86);
-  camera=new THREE.PerspectiveCamera(54,1,.1,400);
-
+/* buildWorld() used to be one ~500-line function building every structure inline.
+   Split into one function per structure (still called in the same order, same
+   coordinates, purely moved code — no behavior change) so new additions like the
+   car-visibility fix and drive mode below land in isolated functions instead of
+   growing an already-large monolith further. */
+function buildGround(){
   const ground=M(new THREE.PlaneGeometry(160,160),nightMode?0x35392E:0xC9B896,{ink:false,lift:.06});
   ground.rotation.x=-Math.PI/2; scene.add(ground);
   const drive=M(new THREE.PlaneGeometry(9,26),0x4E525A,{ink:false,lift:.05});
   drive.rotation.x=-Math.PI/2; drive.position.set(9,.02,6); scene.add(drive);
   const walk=M(new THREE.PlaneGeometry(2.6,12),0x6E727B,{ink:false,lift:.05});
   walk.rotation.x=-Math.PI/2; walk.position.set(0,.02,7); scene.add(walk);
+}
 
-  /* house */
+function buildHouse(){
   const house=new THREE.Group();
   const body=M(new THREE.BoxGeometry(15,6,11),nightMode?0x8C8474:0xCFC5AE,{inkT:.014});
   body.position.y=3; house.add(body);
@@ -224,8 +229,12 @@ function buildWorld(){
   });
   house.position.set(-2,0,-2);
   scene.add(house); world.house=house;
+}
 
-  /* ---- GARAGE (attached, car lives inside) ---- */
+/* the car is parked outside on the driveway (see buildCar()) — this box is a
+   backdrop building only, not a hollow structure the car sits inside; it used
+   to fully enclose the car at the same coordinates, which hid it completely. */
+function buildGarage(){
   const garage=new THREE.Group();
   const gbody=M(new THREE.BoxGeometry(7,4.4,8),nightMode?0x76705F:0xB8AE96,{inkT:.018});
   gbody.position.y=2.2; garage.add(gbody);
@@ -236,9 +245,10 @@ function buildWorld(){
   }
   garage.position.set(9,0,-3.5);
   scene.add(garage); world.garage=garage;
+}
 
-  /* ---- COLMADO (corner store) — down the street ---- */
-  const colPos=new THREE.Vector3(-2,0,24);
+/* ---- COLMADO (corner store) — down the street ---- */
+function buildColmado(colPos){
   const colmado=new THREE.Group();
   const cBody=M(new THREE.BoxGeometry(8,3.6,6), nightMode?0x6B4A5C:0xD4667A, {inkT:.02});
   cBody.position.y=1.8; colmado.add(cBody);
@@ -271,8 +281,10 @@ function buildWorld(){
   const patio=M(new THREE.CircleGeometry(7,24), nightMode?0x4A4038:0xE0C878, {ink:false,lift:.04});
   patio.rotation.x=-Math.PI/2; patio.position.set(colPos.x,.015,colPos.z+7);
   scene.add(patio);
+}
 
-  /* ---- domino table + seated players ---- */
+/* ---- domino table + seated players ---- */
+function buildDominoScene(colPos){
   const dTable=new THREE.Group();
   const tTop=M(new THREE.CylinderGeometry(1.3,1.3,.12,16), 0x8B5A3C, {inkT:.03});
   tTop.position.y=1.0; dTable.add(tTop);
@@ -350,8 +362,10 @@ function buildWorld(){
     scene.add(p); dominoNPCs.push(p);
   });
   world.dominoNPCs=dominoNPCs;
+}
 
-  /* ---- string lights across the colmado patio ---- */
+/* ---- string lights across the colmado patio ---- */
+function buildStreetLights(colPos){
   const lightPosts=[[colPos.x-6,colPos.z+4],[colPos.x+6,colPos.z+4],[colPos.x-6,colPos.z+13],[colPos.x+6,colPos.z+13]];
   lightPosts.forEach(([x,z])=>{
     const post=limb(.08,.10,3.4,0x4A3B2A,{inkT:.06}); post.position.set(x,1.7,z); scene.add(post);
@@ -366,8 +380,10 @@ function buildWorld(){
     bulb.position.set(x, 3.35-sag, z); scene.add(bulb);
     if(nightMode&&i%3===0){ const pl=new THREE.PointLight(0xFFD98A,.5,6); pl.position.copy(bulb.position); scene.add(pl); }
   }
+}
 
-  /* ---- wandering NPC groups (ambient life) ---- */
+/* ---- wandering NPC groups (ambient life) ---- */
+function buildWanderers(colPos){
   const wanderers=[];
   for(let i=0;i<5;i++){
     const skin=[0x8D5524,0xC9884F,0x6B4226,0xA8703E,0x5C3A21][i];
@@ -383,8 +399,10 @@ function buildWorld(){
     scene.add(p); wanderers.push(p);
   }
   world.wanderers=wanderers;
+}
 
-  /* ---- palm trees along the street ---- */
+/* ---- palm trees along the street ---- */
+function buildPalms(colPos){
   for(let i=0;i<9;i++){
     const palm=new THREE.Group();
     const trunkH=3.4+Math.random()*1.4;
@@ -400,19 +418,23 @@ function buildWorld(){
     palm.position.set(colPos.x+side*(9+Math.random()*3), 0, colPos.z-6+i*2.6);
     scene.add(palm);
   }
+}
 
-  /* lighting — MeshToonMaterial sums each light's own step-shaded contribution, so
-     ambient + sun + fill on an upward-facing surface (ground, driveway, car roofs —
-     high N·L against all three at once) used to add past 1.0 and clip solid white.
-     Keeping the sum near ~1.0 on a top-lit face keeps toon banding visible everywhere. */
+/* lighting — MeshToonMaterial sums each light's own step-shaded contribution, so
+   ambient + sun + fill on an upward-facing surface (ground, driveway, car roofs —
+   high N·L against all three at once) used to add past 1.0 and clip solid white.
+   Keeping the sum near ~1.0 on a top-lit face keeps toon banding visible everywhere. */
+function buildLighting(){
   scene.add(new THREE.AmbientLight(0xffffff, nightMode?.22:.42));
   const sun=new THREE.DirectionalLight(0xffffff, nightMode?.20:.46);
   sun.position.set(-14,22,10); scene.add(sun);
   // fill light so the player character reads clearly from behind (third-person default view)
   const fill=new THREE.DirectionalLight(0xCFE0FF, nightMode?.14:.19);
   fill.position.set(6,10,-14); scene.add(fill);
+}
 
-  /* security props */
+/* security props */
+function buildSecurityProps(){
   const sec=S.security;
   if(sec.cameras>0){
     const n=Math.min(4,sec.cameras+1);
@@ -458,21 +480,30 @@ function buildWorld(){
     guard.position.set(4.5,0,9); guard.rotation.y=-.6;
     scene.add(guard); world.guard=guard;
   }
+}
 
-  /* car — lives in the garage */
+/* car — parked on the driveway, just outside the garage door, so it's actually
+   visible (see buildGarage() above) and has room to drive off from. CAR_SPOT
+   is also used by spots() and rebuildCar() so all three stay in sync. */
+const CAR_SPOT=new THREE.Vector3(9,0,4), CAR_ROT_OFFSET=Math.PI/2;
+function buildCar(){
   world.car=makeCar();
-  world.car.position.set(9,0,-3.5); world.car.rotation.y=Math.PI/2;
+  world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
   scene.add(world.car);
+}
 
-  /* the board */
+/* the board */
+function buildBoard(){
   const board=new THREE.Group();
   const bp=limb(.09,.11,2.0,0x5A4630,{inkT:.07}); bp.position.y=1.0; board.add(bp);
   const pan=M(new THREE.BoxGeometry(2.4,1.5,.14),0xEFEADC,{inkT:.03}); pan.position.y=2.3; board.add(pan);
   const gr=M(new THREE.BoxGeometry(2.0,1.15,.06),0x5C7A4A,{ink:false}); gr.position.set(0,2.3,.10); board.add(gr);
   board.position.set(-7.5,0,7.5);
   scene.add(board); world.board=board;
+}
 
-  /* foliage */
+/* foliage */
+function buildFoliage(){
   for(let i=0;i<20;i++){
     const t=new THREE.Group();
     const tr=limb(.16,.26,2.6,0x53381F,{inkT:.05}); tr.position.y=1.3; t.add(tr);
@@ -486,8 +517,10 @@ function buildWorld(){
     const s=.75+Math.random()*.9; t.scale.set(s,s,s);
     scene.add(t);
   }
+}
 
-  /* player */
+/* player */
+function buildPlayer(){
   const per=S.person;
   playerGroup=makePerson(0x7C3AED, per.skin, physiqueLocal(), {tank:0xF3F1E7, jean:0x7C3AED, bling:true, shorts:true});
   // spawn on the walkway (walk plane spans z 1..13), close enough to the house that the
@@ -497,8 +530,10 @@ function buildWorld(){
   playerGroup.position.set(0,0,6);
   scene.add(playerGroup);
   player={pos:playerGroup.position,yaw:Math.PI,walkT:0,targetYaw:Math.PI};
+}
 
-  /* marker */
+/* marker */
+function buildMarker(){
   marker=new THREE.Group();
   const ring=new THREE.Mesh(new THREE.RingGeometry(.45,.62,26),
     new THREE.MeshBasicMaterial({color:0x8FAE7A,side:THREE.DoubleSide,transparent:true,opacity:.9}));
@@ -510,10 +545,37 @@ function buildWorld(){
   // from here. Render straight to the canvas instead — reliable over stylized.
 }
 
+/* buildWorld() assembles every structure above, in the same order and coordinates
+   as before the split — purely orchestration now. */
+function buildWorld(){
+  scene=new THREE.Scene();
+  const sky=nightMode?0x0E1524:0x8FC3DE;
+  scene.background=new THREE.Color(sky);
+  scene.fog=new THREE.Fog(sky,30,86);
+  camera=new THREE.PerspectiveCamera(54,1,.1,400);
+
+  buildGround();
+  buildHouse();
+  buildGarage();
+  const colPos=new THREE.Vector3(-2,0,24);
+  buildColmado(colPos);
+  buildDominoScene(colPos);
+  buildStreetLights(colPos);
+  buildWanderers(colPos);
+  buildPalms(colPos);
+  buildLighting();
+  buildSecurityProps();
+  buildCar();
+  buildBoard();
+  buildFoliage();
+  buildPlayer();
+  buildMarker();
+}
+
 /* ---- interaction spots ---- */
 function spots(){
   return [
-    {key:'car',nm:'YOUR VEHICLE',hint:'View and upgrade',p:new THREE.Vector3(9,0,-3.5),r:5,act:()=>openGarage()},
+    {key:'car',nm:'YOUR VEHICLE',hint:'Drive or view garage',p:CAR_SPOT,r:5,act:()=>openCarMenu()},
     {key:'door',nm:'FRONT DOOR',hint:'Home security',p:new THREE.Vector3(-2,0,5.6),r:3.6,act:()=>openSecurity()},
     {key:'board',nm:'THE BOARD',hint:'Log your day',p:new THREE.Vector3(-7.5,0,7.5),r:3.6,act:()=>openLog()},
     {key:'colmado',nm:'EL COLMADO',hint:'Say what\'s up',p:new THREE.Vector3(-2,0,24),r:6,act:()=>colmadoGreet()}
@@ -609,9 +671,9 @@ function scheduleBeatLoop(){
   }
   bar();
 }
-function updateAmbientAudio(){
+function updateAmbientAudio(pos){
   if(!world.colmado||!audioStarted||!ambientGain) return;
-  const d=Math.hypot(world.colmado.position.x-player.pos.x, world.colmado.position.z+7-player.pos.z);
+  const d=Math.hypot(world.colmado.position.x-pos.x, world.colmado.position.z+7-pos.z);
   const target=audioMuted?0:Math.max(0, Math.min(0.5, 1-(d/26)));
   ambientGain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.4);
 }
@@ -684,6 +746,12 @@ function objectHit(nx,ny){
   return null;
 }
 function handleTap(nx,ny){
+  if(controlMode==='drive'){
+    const g=screenToGround(nx,ny);
+    if(g){ g.x=Math.max(-45,Math.min(45,g.x)); g.z=Math.max(-45,Math.min(45,g.z));
+      driveTarget=g.clone(); showMarker(g,false); }
+    return;
+  }
   if(intruders.length&&tapIntruder(nx,ny)) return;
   const spot=objectHit(nx,ny);
   if(spot){ moveTarget=spot.p.clone(); pendingSpot=spot; showMarker(spot.p,true); return; }
@@ -710,38 +778,54 @@ function resize(){
   renderer.setPixelRatio(dpr); renderer.setSize(w,h,false);
   camera.aspect=w/h; camera.updateProjectionMatrix();
 }
+/* ---- shared seek-and-turn steering, used by both the walking player and the
+   driven car below so neither duplicates the other's movement math ---- */
+function seekTarget(pos, target, speed, dt){
+  if(!target) return {moving:false};
+  const dx=target.x-pos.x, dz=target.z-pos.z, d=Math.hypot(dx,dz);
+  if(d<=.55) return {moving:false, arrived:true};
+  pos.x+=(dx/d)*speed*dt; pos.z+=(dz/d)*speed*dt;
+  return {moving:true, targetYaw:Math.atan2(dx,dz)};
+}
+function smoothYaw(current, target, rate, dt){
+  let dy=target-current;
+  while(dy>Math.PI) dy-=Math.PI*2; while(dy<-Math.PI) dy+=Math.PI*2;
+  return current+dy*Math.min(1,dt*rate);
+}
+
 function tick(){
   if(!running) return;
   raf=requestAnimationFrame(tick);
   const dt=Math.min(clock.getDelta(),.05);
-  let moving=false;
 
-  if(moveTarget){
-    const dx=moveTarget.x-player.pos.x, dz=moveTarget.z-player.pos.z, d=Math.hypot(dx,dz);
-    if(d>.55){
-      moving=true; const sp=7.2;
-      player.pos.x+=(dx/d)*sp*dt; player.pos.z+=(dz/d)*sp*dt;
-      player.targetYaw=Math.atan2(dx,dz); player.walkT+=dt*9.5;
-    } else { moveTarget=null; marker.visible=false; }
+  if(controlMode==='drive'){
+    const seek=seekTarget(world.car.position, driveTarget, CAR_SPEED, dt);
+    if(seek.arrived){ driveTarget=null; marker.visible=false; }
+    else if(seek.moving) carTargetYaw=seek.targetYaw;
+    carYaw=smoothYaw(carYaw, carTargetYaw, CAR_TURN_RATE, dt);
+    world.car.rotation.y=carYaw+CAR_ROT_OFFSET;
+  } else {
+    let moving=false;
+    const seek=seekTarget(player.pos, moveTarget, 7.2, dt);
+    if(seek.arrived){ moveTarget=null; marker.visible=false; }
+    else if(seek.moving){ moving=true; player.targetYaw=seek.targetYaw; player.walkT+=dt*9.5; }
+    player.yaw=smoothYaw(player.yaw, player.targetYaw, 11, dt);
+
+    if(Math.abs(player.pos.x+2)<8.1&&Math.abs(player.pos.z+2)<6.1){
+      const px=player.pos.x+2, pz=player.pos.z+2;
+      if(Math.abs(px)/8.1>Math.abs(pz)/6.1) player.pos.x=(px>0?8.1:-8.1)-2;
+      else player.pos.z=(pz>0?6.1:-6.1)-2;
+      moveTarget=null; marker.visible=false;
+    }
+
+    playerGroup.position.set(player.pos.x,0,player.pos.z);
+    playerGroup.rotation.y=player.yaw;
+    const ud=playerGroup.userData;
+    const sw=Math.sin(player.walkT)*(moving?.72:.05);
+    ud.legL.rotation.x=sw; ud.legR.rotation.x=-sw;
+    ud.armL.rotation.x=-sw*.85; ud.armR.rotation.x=sw*.85;
+    playerGroup.position.y=moving?Math.abs(Math.sin(player.walkT))*.055:0;
   }
-  let dy=player.targetYaw-player.yaw;
-  while(dy>Math.PI) dy-=Math.PI*2; while(dy<-Math.PI) dy+=Math.PI*2;
-  player.yaw+=dy*Math.min(1,dt*11);
-
-  if(Math.abs(player.pos.x+2)<8.1&&Math.abs(player.pos.z+2)<6.1){
-    const px=player.pos.x+2, pz=player.pos.z+2;
-    if(Math.abs(px)/8.1>Math.abs(pz)/6.1) player.pos.x=(px>0?8.1:-8.1)-2;
-    else player.pos.z=(pz>0?6.1:-6.1)-2;
-    moveTarget=null; marker.visible=false;
-  }
-
-  playerGroup.position.set(player.pos.x,0,player.pos.z);
-  playerGroup.rotation.y=player.yaw;
-  const ud=playerGroup.userData;
-  const sw=Math.sin(player.walkT)*(moving?.72:.05);
-  ud.legL.rotation.x=sw; ud.legR.rotation.x=-sw;
-  ud.armL.rotation.x=-sw*.85; ud.armR.rotation.x=sw*.85;
-  playerGroup.position.y=moving?Math.abs(Math.sin(player.walkT))*.055:0;
 
   if(marker.visible){
     marker.userData.t=(marker.userData.t||0)+dt;
@@ -749,11 +833,14 @@ function tick(){
     marker.scale.set(s,1,s); marker.rotation.y+=dt*1.3;
   }
 
-  const tx=player.pos.x-Math.sin(camYaw)*camDist*Math.cos(camPitch);
-  const tz=player.pos.z-Math.cos(camYaw)*camDist*Math.cos(camPitch);
+  // camera follows whichever transform is under control — the car while driving,
+  // the player otherwise — everything else about the orbit-follow is unchanged
+  const followPos=controlMode==='drive'?world.car.position:player.pos;
+  const tx=followPos.x-Math.sin(camYaw)*camDist*Math.cos(camPitch);
+  const tz=followPos.z-Math.cos(camYaw)*camDist*Math.cos(camPitch);
   const ty=2.6+camDist*Math.sin(camPitch);
   camera.position.lerp(new THREE.Vector3(tx,ty,tz), 1-Math.pow(.004,dt));
-  camera.lookAt(player.pos.x,2.4,player.pos.z);
+  camera.lookAt(followPos.x,2.4,followPos.z);
 
   if(world.dog){
     world.dog.position.x=-8+Math.sin(clock.elapsedTime*.5)*3.2;
@@ -761,8 +848,8 @@ function tick(){
   }
   updateIntruders(dt);
   updateWanderers(dt);
-  checkInteract();
-  updateAmbientAudio();
+  if(controlMode==='walk') checkInteract();
+  updateAmbientAudio(followPos);
 
   renderer.render(scene,camera);
 }
@@ -861,10 +948,37 @@ function startWorld(){
     backToTitle();
   }
 }
+/* ---- drive mode ---- */
+function enterDriveMode(){
+  if(!world.car||controlMode==='drive') return;
+  controlMode='drive';
+  playerGroup.visible=false;
+  moveTarget=null; driveTarget=null; marker.visible=false;
+  // seed carYaw from the car's current (parked or previously-driven) rotation,
+  // inverting the fixed model offset so the very first driven frame doesn't snap
+  carYaw=carTargetYaw=world.car.rotation.y-CAR_ROT_OFFSET;
+  document.getElementById('prompt').style.display='none';
+  document.getElementById('exitVehicleBtn').style.display='block';
+  const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO DRIVE · DRAG TO LOOK';
+}
+function exitDriveMode(){
+  if(controlMode!=='drive') return;
+  controlMode='walk';
+  // step out beside the car rather than reappearing on top of it
+  player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
+  player.yaw=player.targetYaw=carYaw;
+  playerGroup.visible=true;
+  driveTarget=null; marker.visible=false;
+  document.getElementById('exitVehicleBtn').style.display='none';
+  const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO WALK · TAP THINGS TO USE · DRAG TO LOOK';
+}
+
 function backToTitle(){
   running=false; if(raf) cancelAnimationFrame(raf);
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
+  controlMode='walk'; driveTarget=null;
+  const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   if(scene){
     // every material here is a fresh instance from M()/inline THREE.Mesh calls (never
     // shared, except the module-level TOON_GRADIENT texture, which stays alive on

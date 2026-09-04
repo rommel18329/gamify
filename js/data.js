@@ -4,7 +4,6 @@ function today(d){ return (d||new Date()).toISOString().slice(0,10); }
 function fmt(k){ return new Date(k+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
 const HABITS=[
-  {id:'water',  nm:'Drink enough water',  vital:'HYDRATION', ic:'💧', col:'#4FC3F7'},
   {id:'teeth',  nm:'Brush teeth',         vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5'},
   {id:'floss',  nm:'Floss',               vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5'},
   {id:'gym',    nm:'Gym',                 vital:'STRENGTH',  ic:'💪', col:'#EF5350'},
@@ -16,7 +15,7 @@ const HABITS=[
   {id:'wend',   nm:'End work on time',    vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726'}
 ];
 const VITALS=[
-  {k:'HYDRATION', ic:'💧', col:'#4FC3F7', src:['water']},
+  {k:'HYDRATION', ic:'💧', col:'#4FC3F7', src:'water'},
   {k:'NUTRITION', ic:'🍎', col:'#66BB6A', src:'diet'},
   {k:'REST',      ic:'😴', col:'#5C6BC0', src:['bed','wake']},
   {k:'STRENGTH',  ic:'💪', col:'#EF5350', src:'workout'},
@@ -28,7 +27,7 @@ const VITALS=[
 
 function blank(){
   return {
-    log:{}, workout:{}, diet:{},
+    log:{}, workout:{}, diet:{}, water:{},
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
@@ -75,7 +74,9 @@ function habitStreak(){
   let st=0,miss=0,d=new Date();
   for(let i=0;i<1200;i++){
     const k=today(d), lg=S.log[k]||{};
-    const all=HABITS.every(h=>lg[h.id]);
+    // water used to be one of HABITS itself before it became a counter — keep it
+    // part of "did everything today" for the streak, same as the perfect-day bonus
+    const all=HABITS.every(h=>lg[h.id]) && (S.water[k]||[]).length>=WATER_TARGET;
     if(all){ miss=0; st++; }
     else if(k!==today()){ miss++; if(miss>=2) break; }
     d.setDate(d.getDate()-1);
@@ -100,6 +101,7 @@ function mult(){ return Math.min(1+Math.max(habitStreak(),workoutStreak())*0.05,
 function vitalLevel(v){
   const k=today(), lg=S.log[k]||{};
   if(v.src==='diet') return Math.min(1,(S.diet[k]||[]).length/DIET_TARGET);
+  if(v.src==='water') return Math.min(1,(S.water[k]||[]).length/WATER_TARGET);
   if(v.src==='workout'){
     const sc=workoutFor(new Date());
     if(sc==='Off') return 1;
@@ -110,7 +112,7 @@ function vitalLevel(v){
 }
 
 /* ---- earning ---- */
-const PAY={habit:12,workout:35,diet:6,perfect:140};
+const PAY={habit:12,workout:35,diet:6,water:2,perfect:140};
 function earn(kind, el){
   const p=PAY[kind]; if(!p) return;
   const m=mult();
@@ -133,9 +135,7 @@ function toggleHabit(id, el){
   if(S.log[k][id]) return false;
   S.log[k][id]=true;
   earn('habit', el);
-  if(HABITS.every(h=>S.log[k][h.id])){
-    setTimeout(()=>{ earn('perfect', el); toast('PERFECT DAY'); impact('PERFECT!'); },320);
-  }
+  checkPerfectDay(el);
   save(); return true;
 }
 function markWorkout(el){
@@ -144,14 +144,30 @@ function markWorkout(el){
   S.workout[k]='done'; earn('workout', el); save(); return true;
 }
 
-/* ---- diet: NUTRITION vital fills as real meals get logged, up to DIET_TARGET/day ---- */
-const DIET_TARGET=2;
-function logMeal(el){
+/* ---- counter-based dailies: NUTRITION and HYDRATION fill as meals/cups get
+   logged, up to their own target/day, instead of being a single checkbox ---- */
+const DIET_TARGET=2, WATER_TARGET=8;
+function logCounter(field, target, payKind, el){
   const k=today();
-  S.diet[k]=S.diet[k]||[];
-  if(S.diet[k].length>=DIET_TARGET) return false;
-  S.diet[k].push(Date.now());
-  earn('diet', el); save(); return true;
+  S[field][k]=S[field][k]||[];
+  if(S[field][k].length>=target) return false;
+  S[field][k].push(Date.now());
+  earn(payKind, el); save(); return true;
+}
+function logMeal(el){ return logCounter('diet', DIET_TARGET, 'diet', el); }
+function logWater(el){
+  const done=logCounter('water', WATER_TARGET, 'water', el);
+  if(done) checkPerfectDay(el);
+  return done;
+}
+
+/* ---- perfect day: every boolean habit AND today's water target, since water
+   used to be one of HABITS itself before it became a counter ---- */
+function checkPerfectDay(el){
+  const k=today(), lg=S.log[k]||{};
+  if(HABITS.every(h=>lg[h.id]) && (S.water[k]||[]).length>=WATER_TARGET){
+    setTimeout(()=>{ earn('perfect', el); toast('PERFECT DAY'); impact('PERFECT!'); },320);
+  }
 }
 
 /* ---- security (real products / real prices) ---- */

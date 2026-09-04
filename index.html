@@ -42,6 +42,9 @@
     <button class="hbtn" id="muteBtn" onclick="toggleMute()">🔊</button>
     <button class="hbtn" onclick="backToTitle()">MENU</button>
   </div>
+  <button id="exitVehicleBtn" class="hbtn accent"
+    style="display:none;position:absolute;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);z-index:10;"
+    onclick="exitDriveMode()">EXIT VEHICLE</button>
   <div id="raidBar"></div>
   <div id="prompt">
     <div class="pb"><div class="pl"></div><div class="ph"></div></div>
