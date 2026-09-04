@@ -11,6 +11,14 @@ pays out instead.
 This is a personal side project, unrelated to any CRM work — don't conflate
 the two.
 
+## Workflow
+
+Once changes are made, tested (see below), and pushed as a PR, merge it into
+`main` right away rather than waiting for separate approval — the owner has
+asked for that standing. Still hold off and flag it instead if something
+came back genuinely uncertain (tests didn't fully pass, a behavior call you
+weren't sure was wanted) rather than merging through it.
+
 ## Running it
 
 No build step, no dependencies. Either:
