@@ -185,6 +185,48 @@ reason:
   material + ink outline; only reach for a bare `THREE.MeshBasicMaterial`
   for small unshaded accents (headlight glow, an LED, a catchlight) the
   way the existing code does.
+- **Textures are multiply maps only.** `detailMap(kind, repeatX, repeatY)`
+  in `js/game.js` returns a `CanvasTexture` painted at runtime (so it costs
+  nothing to download) that is *white with the detail painted in as darker
+  pixels*. The surface's actual tint always comes from `M()`'s color
+  argument, never baked into the image. That's deliberate: a map that can
+  only darken cannot push a face into the white-clip described above, so
+  adding a texture never changes a surface's light-sum profile. If you
+  ever bake a base color into a canvas instead, re-check a top-lit face
+  isn't clipping. The canvases and the per-repeat textures are cached
+  forever (like `TOON_GRADIENT`) — `backToTitle()`'s material disposal
+  doesn't touch textures, so the cache stays valid across ENTER trips.
+  `concreteCanvas()`'s grime band lives in the *bottom* rows, which is v=0
+  once three.js flips Y, so walls using it are mapped with a Y repeat of 1
+  and must not be tiled vertically or the grime shows up mid-wall.
+
+### Dominican building parts
+
+The house, the garage and the colmado are all assembled from three shared
+helpers in `js/game.js` rather than each rolling its own: `rejas()` (the
+ornate barred windows/gates), `zincRoof()` (corrugated roofing), and
+`roofKit()` (rooftop tinaco plus the rebar stubs of a second floor that
+never got built). Two things baked in from looking at the renders:
+
+- `zincRoof()`'s ribs are **real geometry straddling the panel**, not just
+  the texture, and not sitting on top of it. A mapped flat slab reads as a
+  grey plank from any distance; ribs only on the upper face leave the
+  underside flat, and the porch awning is at head height so its underside
+  is what you actually look at most of the game.
+- `roofKit()`'s column stubs have to clear the roof parapet or the whole
+  detail is invisible from ground level.
+
+Small repeated pieces (bars, diamonds, ribs, sign lettering) pass
+`{ink:false}` — an outline on each of a few dozen adjacent slivers reads as
+noise and doubles the mesh count for nothing. These builders together add
+roughly 200 meshes to the scene; if that budget gets tight, rib spacing and
+the rejas `spacing` argument are the cheap dials, and the house's rear
+windows already skip their rejas for this reason.
+
+Colmado signage is **deliberately generic**. Real colmados are covered in
+beer and phone-company branding, but shipping actual trademarks would be
+brand impersonation — the sign uses the same colours and layout with no
+real logo. Keep it that way.
 
 ## Camera
 
