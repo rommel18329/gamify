@@ -62,6 +62,9 @@ function openStats(){
 function openLog(){
   const k=today(), lg=S.log[k]||{};
   let html='';
+  const cups=(S.water[k]||[]).length, cupsDone=cups>=WATER_TARGET;
+  html+='<div class="row'+(cupsDone?' done':'')+'" '+(cupsDone?'':'onclick="onWaterTap(this)"')+'>'+
+    '<div class="ck">'+(cupsDone?'✓':cups)+'</div><div class="nm">💧 Drink a cup of water ('+cups+'/'+WATER_TARGET+')</div></div>';
   HABITS.forEach(h=>{
     const done=!!lg[h.id];
     html+='<div class="row'+(done?' done':'')+'" onclick="onHabitTap(this,\''+h.id+'\')">'+
@@ -86,6 +89,9 @@ function onWorkoutTap(el){
 }
 function onMealTap(el){
   if(logMeal(el)){ renderVitals(); openLog(); }
+}
+function onWaterTap(el){
+  if(logWater(el)){ renderVitals(); openLog(); }
 }
 
 /* ---- security sheet ---- */
@@ -119,6 +125,15 @@ function renderEventLog(){
   el.innerHTML=S.events.length
     ? S.events.slice(0,10).map(l=>'<div class="logline '+l.cls+'">'+fmt(today(new Date(l.t)))+' — '+l.text+'</div>').join('')
     : '<div class="empty">Nothing yet.</div>';
+}
+
+/* ---- car interaction: drive it, or go straight to the garage/upgrade sheet ---- */
+function openCarMenu(){
+  const html=
+    '<button class="gb" style="width:100%;margin-bottom:10px" onclick="closeSheet();enterDriveMode()">🚗 DRIVE</button>'+
+    '<button class="gb" style="width:100%" onclick="openGarage()">🔧 VIEW GARAGE</button>';
+  document.getElementById('sheetBody').innerHTML=html;
+  openSheet('YOUR VEHICLE');
 }
 
 /* ---- garage sheet ---- */
@@ -155,9 +170,12 @@ function renderGarage(){ if(document.getElementById('sheetTitle').textContent===
 function setPaint(c){ S.vehicle.paint=c; save(); renderGarage(); rebuildCar(); }
 function rebuildCar(){
   if(!world.car||!scene) return;
+  // preserve wherever the car currently is (not necessarily CAR_SPOT anymore,
+  // once it's drivable) rather than snapping it back to its parked position
+  const pos=world.car.position.clone(), rot=world.car.rotation.y;
   scene.remove(world.car);
   world.car=makeCar();
-  world.car.position.set(9,0,-3.5); world.car.rotation.y=Math.PI/2;
+  world.car.position.copy(pos); world.car.rotation.y=rot;
   scene.add(world.car);
 }
 function rebuildProps(){ /* security props rebuild on next world entry */ }

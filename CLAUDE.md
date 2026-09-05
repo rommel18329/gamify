@@ -1,14 +1,23 @@
 # Sprout
 
-A gamified habit tracker. Checking off real habits (water, hygiene, gym,
-journaling, sleep schedule, work discipline) and logging meals earns
+A gamified habit tracker. Checking off real habits (hygiene, gym, journaling,
+sleep schedule, work discipline), drinking water, and logging meals earns
 in-game cash and "standing," which buys home-security upgrades and a
-vehicle in a 3D world you walk around. Missing your property's deterrence
-lets random "incidents" (break-ins) succeed and cost you cash; defending
-them in person (as a small raid where you tap intruders) pays out instead.
+vehicle in a 3D world you walk around — and can drive. Missing your
+property's deterrence lets random "incidents" (break-ins) succeed and cost
+you cash; defending them in person (as a small raid where you tap intruders)
+pays out instead.
 
 This is a personal side project, unrelated to any CRM work — don't conflate
 the two.
+
+## Workflow
+
+Once changes are made, tested (see below), and pushed as a PR, merge it into
+`main` right away rather than waiting for separate approval — the owner has
+asked for that standing. Still hold off and flag it instead if something
+came back genuinely uncertain (tests didn't fully pass, a behavior call you
+weren't sure was wanted) rather than merging through it.
 
 ## Running it
 
@@ -34,8 +43,10 @@ css/styles.css       all styling
 js/errors.js         window.onerror -> visible on-screen error box (loads first)
 js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
-js/game.js           the 3D scene: world building, character/car/prop meshes,
-                     camera, input, the render loop
+js/game.js           the 3D scene: world building (one function per structure —
+                     buildHouse/buildGarage/buildColmado/etc., all called from
+                     buildWorld()), character/car/prop meshes, camera, input,
+                     movement (walk + drive), the render loop
 js/ui.js             DOM glue: renders sheets (LOG/STATS/SECURITY/GARAGE/BACKUP)
                      from state in data.js, wires up onclick handlers
 manifest.json, icon.svg   PWA install metadata
@@ -66,6 +77,14 @@ was `logMeal()` in `js/data.js` + a row in `openLog()` in `js/ui.js`. Don't
 add a `PAY` entry or a vital `src` without also adding the UI path that
 triggers it — half-wired vitals/economy entries are dead code players can
 never see move, which reads as broken.
+
+`NUTRITION` and `HYDRATION` are counter-based dailies (a target number of
+meals/cups per day, not a single checkbox) sharing one `logCounter(field,
+target, payKind, el)` helper in `js/data.js` — add a third the same way
+rather than copy-pasting. `HABITS.every(...)` (the "did everything today"
+check, used by both `habitStreak()` and `checkPerfectDay()`) has to be
+paired with the water-target check by hand, since water used to be one of
+`HABITS` itself before it became a counter and isn't anymore.
 
 Money and "standing" only ever move through `earn()` — it applies the
 streak multiplier, XP, and level-ups in one place. Don't add cash/standing
@@ -114,11 +133,12 @@ reason:
 ## Camera
 
 Third-person, orbit-drag controlled (`camYaw`/`camPitch`, fixed
-`camDist=9.5`), always looking at the player and converging toward its
+`camDist=9.5`), always looking at whichever transform is under control (the
+player, or the car in drive mode — see below) and converging toward its
 ideal position with a `lerp`. It has **no collision** — it can end up
 inside nearby geometry if the player stands close enough to a building
 and looks toward it. The player's spawn point (`playerGroup.position` in
-`buildWorld()`) was chosen specifically to keep the *default* camera clear
+`buildPlayer()`) was chosen specifically to keep the *default* camera clear
 of the colmado building (it used to converge to a resting spot several
 units inside it, rendering as a wall of solid color filling the screen —
 the classic "camera clipped through geometry" bug, and the first thing
@@ -126,6 +146,30 @@ every player saw). If you move the spawn point, the world layout, or
 `camDist`/default `camPitch`, re-check that the converged camera position
 (`player.pos + camDist*cos(pitch)` roughly, in the direction opposite
 `camYaw`) doesn't land inside a building.
+
+## Movement & driving
+
+`tick()` in `js/game.js` runs one of two branches depending on `controlMode`
+(`'walk'` or `'drive'`), both built on two small shared helpers —
+`seekTarget(pos, target, speed, dt)` (move a position toward a point,
+returns whether it arrived/is moving and the heading to face) and
+`smoothYaw(current, target, rate, dt)` (turn toward a heading at a given
+rate). The walking player and the driven car each call these with their own
+speed/turn-rate constants rather than duplicating the seek-and-turn math.
+`enterDriveMode()`/`exitDriveMode()` (also `js/game.js`) swap which
+transform `handleTap()` sends taps to, hide/show `playerGroup`, and
+toggle the `#exitVehicleBtn` HUD button. `backToTitle()` resets
+`controlMode` back to `'walk'` — don't remove that, or leaving to the title
+screen mid-drive would carry the mode into the next session with the
+player mesh still hidden.
+
+The car itself is a backdrop-adjacent object, not inside the garage: see
+`CAR_SPOT`/`buildGarage()`'s comment in `js/game.js` for why (the garage is
+a solid, unopened box — parking the car at the same coordinates hid it
+completely). `rebuildCar()` in `js/ui.js` (called after a paint/mod
+purchase) preserves the car's *current* position/rotation rather than
+resetting to `CAR_SPOT`, since the car may not be parked there anymore
+once it's driveable.
 
 ## Known deliberate non-features
 
