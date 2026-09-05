@@ -147,6 +147,23 @@ every player saw). If you move the spawn point, the world layout, or
 (`player.pos + camDist*cos(pitch)` roughly, in the direction opposite
 `camYaw`) doesn't land inside a building.
 
+`cameraMode` (`'orbit'` default, or `'first'` — toggled by the HUD button,
+`toggleCameraMode()`) reuses the same `camYaw`/`camPitch` drag state for both
+modes, but they mean different things in each: in orbit mode they place the
+camera *behind* the target; in first-person they're remapped into the
+camera's own look direction *from* the target's eyes (`lookPitch` in `tick()`
+deliberately inverts `camPitch`'s sense — dragging up should look up, but
+`camPitch` itself decreases on an upward drag). `updatePlayerVisibility()`
+is the one place that decides whether `playerGroup` is shown — hidden in
+first-person (you'd otherwise be staring at the inside of your own head) or
+while driving, visible otherwise — call it after changing either
+`controlMode` or `cameraMode` rather than setting `.visible` directly, or
+the two can leave it in a stale state (e.g. toggling camera mode back to
+orbit while still driving must NOT reveal the player). `cameraMode` is a
+deliberate preference, not session state — it persists across a
+MENU→ENTER round trip on purpose, so `backToTitle()` resets `controlMode`
+but not this.
+
 ## Movement & driving
 
 `tick()` in `js/game.js` runs one of two branches depending on `controlMode`
