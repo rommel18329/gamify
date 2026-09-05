@@ -41,16 +41,73 @@ function liftColor(hex, lift){
   c.lerp(new THREE.Color(0xffffff), Math.min(0.6, lift));
   return c;
 }
-function animeMat(color,rimCol,rimPow,lift){
-  return new THREE.MeshToonMaterial({ color: liftColor(color, lift), gradientMap: toonGradientMap() });
+function animeMat(color,rimCol,rimPow,lift,map){
+  const p={ color: liftColor(color, lift), gradientMap: toonGradientMap() };
+  if(map) p.map=map;
+  return new THREE.MeshToonMaterial(p);
 }
+
+/* ---- procedural detail maps ----
+   Generated on a <canvas> at runtime, so they add nothing to the download size.
+
+   They are deliberately MULTIPLY maps: white base with the detail painted in as
+   darker pixels only. MeshToonMaterial multiplies map * color, so a surface keeps
+   both its base tint (set by the color argument, not baked into the image) and the
+   same light-sum profile it had untextured — see buildLighting()'s note on how
+   easily a top-lit face clips to solid white here. A texture that can only darken
+   can never push a face into that clip.
+
+   Cached per (kind, repeat) and never disposed, same as TOON_GRADIENT: the canvas
+   is the expensive part, and backToTitle()'s material disposal doesn't touch
+   textures, so the cache stays valid across MENU->ENTER round trips. */
+const DETAIL_CANVAS={}, DETAIL_MAPS={};
+function concreteCanvas(){
+  const c=document.createElement('canvas'); c.width=c.height=128;
+  const x=c.getContext('2d');
+  x.fillStyle='#ffffff'; x.fillRect(0,0,128,128);
+  for(let i=0;i<900;i++){                                   // mottled hand-rolled paint
+    x.fillStyle='rgba(0,0,0,'+(0.02+Math.random()*0.07)+')';
+    x.fillRect(Math.random()*128,Math.random()*128,2+Math.random()*7,2+Math.random()*7);
+  }
+  for(let i=0;i<128;i+=32){ x.fillStyle='rgba(0,0,0,.09)'; x.fillRect(0,i,128,1); }  // block courses
+  // damp/grime creeping up from the ground. Canvas row 127 is v=0 (three.js flips
+  // Y by default), so this band lands at the BOTTOM of the wall — which is why
+  // walls below are mapped with a Y repeat of 1 and not tiled vertically.
+  const grad=x.createLinearGradient(0,86,0,128);
+  grad.addColorStop(0,'rgba(40,32,22,0)'); grad.addColorStop(1,'rgba(40,32,22,.40)');
+  x.fillStyle=grad; x.fillRect(0,86,128,42);
+  return c;
+}
+function zincCanvas(){
+  const c=document.createElement('canvas'); c.width=c.height=96;
+  const x=c.getContext('2d');
+  x.fillStyle='#ffffff'; x.fillRect(0,0,96,96);
+  for(let i=0;i<96;i+=8){                                   // corrugation shading
+    x.fillStyle='rgba(0,0,0,.24)'; x.fillRect(i,0,3,96);
+    x.fillStyle='rgba(0,0,0,.06)'; x.fillRect(i+4,0,2,96);
+  }
+  for(let i=0;i<26;i++){                                    // rust streaks
+    x.fillStyle='rgba(96,44,16,'+(0.12+Math.random()*0.24)+')';
+    x.fillRect(Math.random()*96,Math.random()*96,3+Math.random()*6,8+Math.random()*26);
+  }
+  return c;
+}
+function detailMap(kind,rx,ry){
+  const key=kind+'|'+rx+'|'+ry;
+  if(DETAIL_MAPS[key]) return DETAIL_MAPS[key];
+  if(!DETAIL_CANVAS[kind]) DETAIL_CANVAS[kind]=(kind==='zinc'?zincCanvas():concreteCanvas());
+  const t=new THREE.CanvasTexture(DETAIL_CANVAS[kind]);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rx,ry);
+  DETAIL_MAPS[key]=t; return t;
+}
+function shade(hex,f){ const c=new THREE.Color(hex); c.multiplyScalar(f); return c.getHex(); }
 function ink(mesh,t){
   const o=new THREE.Mesh(mesh.geometry,new THREE.MeshBasicMaterial({color:0x0B0E13,side:THREE.BackSide}));
   o.scale.multiplyScalar(1+(t||0.028)); mesh.add(o); return mesh;
 }
 function M(geo,color,opts){
   opts=opts||{};
-  const mesh=new THREE.Mesh(geo, animeMat(color,opts.rim,opts.rimPow,opts.lift));
+  const mesh=new THREE.Mesh(geo, animeMat(color,opts.rim,opts.rimPow,opts.lift,opts.map));
   if(opts.ink!==false){ try{ ink(mesh,opts.inkT); }catch(e){} }
   return mesh;
 }
@@ -207,29 +264,142 @@ function buildGround(){
   ground.rotation.x=-Math.PI/2; scene.add(ground);
   const drive=M(new THREE.PlaneGeometry(9,26),0x4E525A,{ink:false,lift:.05});
   drive.rotation.x=-Math.PI/2; drive.position.set(9,.02,6); scene.add(drive);
-  const walk=M(new THREE.PlaneGeometry(2.6,12),0x6E727B,{ink:false,lift:.05});
-  walk.rotation.x=-Math.PI/2; walk.position.set(0,.02,7); scene.add(walk);
+  // the walkway is a raised concrete sidewalk with a kerb either side, not a
+  // painted stripe on the dirt — same footprint as before so nothing that keys
+  // off the player's spawn or the door spot shifts
+  const walk=M(new THREE.BoxGeometry(2.6,.22,12),nightMode?0x5B584F:0xACA492,{ink:false,lift:.04});
+  walk.position.set(0,.11,7); scene.add(walk);
+  [-1.45,1.45].forEach(x=>{
+    const kerb=M(new THREE.BoxGeometry(.3,.34,12),nightMode?0x6B6659:0xC0B9A8,{ink:false,lift:.04});
+    kerb.position.set(x,.17,7); scene.add(kerb);
+  });
 }
 
+/* ---- shared Dominican building parts ----
+   rejas (the ornate window/door bars on practically every DR building), corrugated
+   zinc roofing, and the rooftop tinaco + rebar stubs of a second floor that never
+   got built. The house and the colmado both assemble from these rather than each
+   rolling its own version. Small repeated pieces (bars, ribs, lettering) use
+   {ink:false} — a backface outline on every one of a few dozen adjacent slivers
+   reads as noise and doubles the mesh count for nothing. */
+function rejas(w,h,color,spacing){
+  const g=new THREE.Group();
+  const bar=(bw,bh,x,y)=>{
+    const b=M(new THREE.BoxGeometry(bw,bh,.06),color,{ink:false});
+    b.position.set(x,y,0); g.add(b);
+  };
+  bar(w,.09,0,h/2); bar(w,.09,0,-h/2);                     // frame
+  const n=Math.max(3,Math.round(w/(spacing||.42)));
+  for(let i=0;i<=n;i++) bar(.07,h,-w/2+i*(w/n),0);         // vertical bars
+  bar(w,.07,0,0);                                          // mid rail
+  for(let i=0;i<n;i++){                                    // decorative diamonds
+    const d=M(new THREE.BoxGeometry(.14,.14,.05),color,{ink:false});
+    d.position.set(-w/2+(i+.5)*(w/n),0,0); d.rotation.z=Math.PI/4; g.add(d);
+  }
+  return g;
+}
+/* techo de zinc. The mapped panel alone reads as a flat grey slab from any
+   distance, so the corrugation is real rib geometry on top of it — that's the
+   difference the hybrid look is built on. */
+function zincRoof(w,d,color,tilt){
+  const g=new THREE.Group();
+  const panel=M(new THREE.BoxGeometry(w,.10,d),color,
+    {inkT:.02,map:detailMap('zinc',Math.max(2,Math.round(w/1.8)),Math.max(2,Math.round(d/1.8)))});
+  g.add(panel);
+  // ribs straddle the panel rather than sitting on top of it: zinc is a thin sheet,
+  // so the corrugation has to read from underneath too — the porch awning is at
+  // head height and you spend most of the game looking up at its underside
+  for(let i=-w/2+.34;i<w/2-.1;i+=.68){
+    const rib=M(new THREE.BoxGeometry(.18,.30,d),shade(color,.86),{ink:false});
+    rib.position.set(i,0,0); g.add(rib);
+  }
+  g.rotation.x=tilt||0;
+  return g;
+}
+function roofKit(g,x,y,z,spanX,spanZ){
+  const tank=M(new THREE.CylinderGeometry(.8,.8,1.2,12),nightMode?0x121822:0x1B2430,{inkT:.03});
+  tank.position.set(x,y+.6,z); g.add(tank);
+  const lid=M(new THREE.CylinderGeometry(.38,.38,.14,10),nightMode?0x272E38:0x39424E,{ink:false});
+  lid.position.set(x,y+1.26,z); g.add(lid);
+  // the column stubs have to clear the roof parapet or none of this reads from
+  // ground level — that's the whole point of the detail
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz])=>{
+    const col=M(new THREE.BoxGeometry(.34,1.3,.34),nightMode?0x4A3D2E:0x6E5A44,{inkT:.04});
+    col.position.set(x+sx*spanX,y+.65,z+sz*spanZ); g.add(col);
+    for(let i=0;i<3;i++){
+      const r=M(new THREE.BoxGeometry(.06,.7,.06),nightMode?0x5C4C3A:0x8A7358,{ink:false});
+      r.position.set(x+sx*spanX+(i-1)*.1,y+1.65,z+sz*spanZ); g.add(r);
+    }
+  });
+}
+
+/* The house keeps its previous 15 x 11 footprint at (-2,0,-2) and its front-door
+   spot at z=5.62 — tick()'s hard-coded wall collision box, spots(), and the
+   security props all key off those numbers. Only the styling changed: flat
+   concrete roof instead of a gable, painted block with a contrasting skirt,
+   barred windows, and a galería out front. */
 function buildHouse(){
   const house=new THREE.Group();
-  const body=M(new THREE.BoxGeometry(15,6,11),nightMode?0x8C8474:0xCFC5AE,{inkT:.014});
+  const WALL=nightMode?0x8A3F53:0xE86A8A;                  // barrio pink
+  const TRIM=nightMode?0x8C8474:0xE4DCC8;
+  const ROOF=nightMode?0x7C7566:0xBFB6A4;
+  const body=M(new THREE.BoxGeometry(15,6,11),WALL,{inkT:.014,map:detailMap('wall',4,1)});
   body.position.y=3; house.add(body);
-  const roof=M(new THREE.ConeGeometry(11.9,4.3,4),0x6B3F2E,{inkT:.016});
-  roof.position.y=8.15; roof.rotation.y=Math.PI/4; house.add(roof);
-  const eave=M(new THREE.BoxGeometry(16.4,.32,12.4),0x4C2F22,{inkT:.02});
-  eave.position.y=6.05; house.add(eave);
-  [-3.4,3.4].forEach(x=>{ const p=limb(.16,.20,3.0,0xE4DCC8,{inkT:.05}); p.position.set(x,1.5,7.4); house.add(p); });
-  const porchRoof=M(new THREE.BoxGeometry(8.4,.28,3.4),0x4C2F22,{inkT:.03}); porchRoof.position.set(0,3.1,6.6); house.add(porchRoof);
-  const door=M(new THREE.BoxGeometry(2.2,3.7,.26),0x452F20,{inkT:.03}); door.position.set(0,1.85,5.62); house.add(door);
+  const skirt=M(new THREE.BoxGeometry(15.1,1.4,11.1),nightMode?0x5E2434:0x9E3B57,{inkT:.016});
+  skirt.position.y=.7; house.add(skirt);
+
+  // flat roof slab + parapet — DR houses are flat-topped, so there's somewhere to
+  // put the tinaco and somewhere to build the next floor if the money ever shows up
+  const slab=M(new THREE.BoxGeometry(15.8,.4,11.8),ROOF,{inkT:.018});
+  slab.position.y=6.15; house.add(slab);
+  [5.75,-5.75].forEach(pz=>{
+    const p=M(new THREE.BoxGeometry(15.8,.7,.3),ROOF,{inkT:.02});
+    p.position.set(0,6.7,pz); house.add(p);
+  });
+  [-7.75,7.75].forEach(px=>{
+    const p=M(new THREE.BoxGeometry(.3,.7,11.8),ROOF,{inkT:.02});
+    p.position.set(px,6.7,0); house.add(p);
+  });
+  roofKit(house,-3.2,6.35,-1.4,3.2,3.4);
+
+  // galería — the covered front porch. Columns stay at z=7.4 (the old porch
+  // posts' position): the default camera converges just behind the player's
+  // spawn, and pulling the porch any further forward puts a post in that shot.
+  const aw=zincRoof(10.4,3.6,nightMode?0x5F646A:0x9AA0A6,-.05);
+  aw.position.set(0,4.75,6.2); house.add(aw);
+  [-4.4,4.4].forEach(x=>{
+    const col=M(new THREE.BoxGeometry(.34,4.7,.34),TRIM,{inkT:.04});
+    col.position.set(x,2.35,7.4); house.add(col);
+  });
+  const step=M(new THREE.BoxGeometry(5.4,.3,1.6),nightMode?0x7E7768:0xC7BFAE,{inkT:.03});
+  step.position.set(0,.15,6.2); house.add(step);
+
+  const door=M(new THREE.BoxGeometry(2.2,3.7,.26),0x452F20,{inkT:.03});
+  door.position.set(0,1.85,5.62); house.add(door);
   const knob=new THREE.Mesh(new THREE.SphereGeometry(.09,10,8),new THREE.MeshBasicMaterial({color:0xC9A227}));
   knob.position.set(.75,1.85,5.78); house.add(knob);
+  const gate=rejas(2.0,3.5,nightMode?0x1E2A32:0x2B3A44,.4);
+  gate.position.set(0,1.85,5.92); house.add(gate);
+
   [[-5,5.62],[5,5.62],[-5,-5.62],[5,-5.62]].forEach(([x,z])=>{
-    const fr=M(new THREE.BoxGeometry(2.7,2.3,.18),0xE4DCC8,{inkT:.03}); fr.position.set(x,3.5,z); house.add(fr);
+    const front=z>0, s=front?1:-1;
+    const fr=M(new THREE.BoxGeometry(2.7,2.3,.18),TRIM,{inkT:.03}); fr.position.set(x,3.5,z); house.add(fr);
     const gl=new THREE.Mesh(new THREE.BoxGeometry(2.3,1.9,.1),
-      new THREE.MeshBasicMaterial({color:nightMode?0xFFD98A:0x4E7C96}));
-    gl.position.set(x,3.5,z+(z>0?.06:-.06)); house.add(gl);
+      new THREE.MeshBasicMaterial({color:nightMode?0xFFD98A:0x24333D}));
+    gl.position.set(x,3.5,z+s*.06); house.add(gl);
+    // rejas only on the street side — a barred window is ~20 small meshes, and the
+    // two rear windows face the empty back of the lot where nobody ever stands
+    if(front){
+      const r=rejas(2.4,2.0,nightMode?0xB9B2A2:0xE9E7DA,.48);
+      r.position.set(x,3.5,z+s*.20); house.add(r);
+    }
+    const sill=M(new THREE.BoxGeometry(2.9,.16,.36),TRIM,{ink:false});
+    sill.position.set(x,2.28,z+s*.12); house.add(sill);
   });
+
+  const meter=M(new THREE.BoxGeometry(.5,.7,.24),nightMode?0x3D444C:0x5A6470,{inkT:.05});
+  meter.position.set(6.4,3.7,5.6); house.add(meter);
+
   house.position.set(-2,0,-2);
   scene.add(house); world.house=house;
 }
@@ -237,46 +407,85 @@ function buildHouse(){
 /* the car is parked outside on the driveway (see buildCar()) — this box is a
    backdrop building only, not a hollow structure the car sits inside; it used
    to fully enclose the car at the same coordinates, which hid it completely. */
+/* Same footprint and door position as before — objectHit() picks the garage out
+   by mesh and CAR_SPOT parks the car right off its door face. Only restyled, so
+   it doesn't sit next to the house looking like it came from a different game. */
 function buildGarage(){
   const garage=new THREE.Group();
-  const gbody=M(new THREE.BoxGeometry(7,4.4,8),nightMode?0x76705F:0xB8AE96,{inkT:.018});
+  const gbody=M(new THREE.BoxGeometry(7,4.4,8),nightMode?0x76705F:0xB8AE96,
+    {inkT:.018,map:detailMap('wall',2,1)});
   gbody.position.y=2.2; garage.add(gbody);
-  const groof=M(new THREE.BoxGeometry(7.6,.3,8.6),0x4C2F22,{inkT:.02}); groof.position.y=4.5; garage.add(groof);
-  const gdoor=M(new THREE.BoxGeometry(5.6,3.6,.22),0x3A3E46,{inkT:.03}); gdoor.position.set(0,1.9,4.05); garage.add(gdoor);
-  for(let i=1;i<5;i++){
+  const gskirt=M(new THREE.BoxGeometry(7.1,1.0,8.1),nightMode?0x4E4A3F:0x8A8069,{inkT:.02});
+  gskirt.position.y=.5; garage.add(gskirt);
+  const groof=zincRoof(7.8,8.8,nightMode?0x5A5F65:0x8D9299,0); groof.position.y=4.5; garage.add(groof);
+  const gdoor=M(new THREE.BoxGeometry(5.6,3.6,.22),nightMode?0x24272D:0x3A3E46,{inkT:.03});
+  gdoor.position.set(0,1.9,4.05); garage.add(gdoor);
+  for(let i=1;i<5;i++){   // roll-up door slats
     const line=M(new THREE.BoxGeometry(5.6,.05,.02),0x24262C,{ink:false}); line.position.set(0,.5+i*.62,4.16); garage.add(line);
   }
   garage.position.set(9,0,-3.5);
   scene.add(garage); world.garage=garage;
 }
 
-/* ---- COLMADO (corner store) — down the street ---- */
+/* ---- COLMADO (corner store) — down the street ----
+   Depth stays at 6 (front face at colPos.z+3, back at colPos.z-3): the default
+   camera converges around z=15 behind the player's spawn, and pushing the back
+   wall any closer to that walks straight back into the camera-inside-a-building
+   bug this building caused once already. The signage is deliberately generic —
+   real colmados are plastered in beer and phone-company branding, but copying
+   actual trademarks into a shipped app is brand impersonation, so this uses the
+   same colours and layout with a made-up name. */
 function buildColmado(colPos){
   const colmado=new THREE.Group();
-  const cBody=M(new THREE.BoxGeometry(8,3.6,6), nightMode?0x6B4A5C:0xD4667A, {inkT:.02});
-  cBody.position.y=1.8; colmado.add(cBody);
-  const cTrim=M(new THREE.BoxGeometry(8.2,.4,6.2), nightMode?0x3A6B5E:0x4FA88C, {inkT:.02});
-  cTrim.position.y=3.6; colmado.add(cTrim);
-  // awning — striped, angled
-  const awning=M(new THREE.BoxGeometry(8.6,.18,2.6), 0xE9E7DA, {inkT:.02});
-  awning.position.set(0,3.15,3.9); awning.rotation.x=-0.18; colmado.add(awning);
-  for(let i=-4;i<4;i++){
-    const stripe=M(new THREE.BoxGeometry(1.0,.02,2.65), i%2===0?0xE63946:0xE9E7DA, {ink:false});
-    stripe.position.set(i*1.05+0.5,3.16,3.9); stripe.rotation.x=-0.18; colmado.add(stripe);
+  const WALL=nightMode?0x1C6058:0x2FA79B;                  // turquoise, a real colmado colour
+  const BASE=nightMode?0x123640:0x1D4E5E;
+  const cBody=M(new THREE.BoxGeometry(10,4.2,6),WALL,{inkT:.02,map:detailMap('wall',3,1)});
+  cBody.position.y=2.1; colmado.add(cBody);
+  const skirt=M(new THREE.BoxGeometry(10.1,1.1,6.1),BASE,{inkT:.02});
+  skirt.position.y=.55; colmado.add(skirt);
+
+  const roof=zincRoof(11.2,7.4,nightMode?0x5A5F65:0x8D9299,-.07);
+  roof.position.y=4.45; colmado.add(roof);
+  const eave=M(new THREE.BoxGeometry(10.6,.26,7.0),nightMode?0x8E8A7E:0xE0DCCF,{inkT:.02});
+  eave.position.y=4.2; colmado.add(eave);
+
+  // open counter behind rejas — how you actually buy at a colmado, through the bars
+  const open=M(new THREE.BoxGeometry(6.0,2.1,.36),nightMode?0x0E1216:0x14181C,{inkT:.03});
+  open.position.set(0,2.2,3.0); colmado.add(open);
+  const bars=rejas(5.8,2.0,nightMode?0xB9B2A2:0xE9E7DA,.46);
+  bars.position.set(0,2.2,3.24); colmado.add(bars);
+  const counter=M(new THREE.BoxGeometry(6.4,.3,.95),nightMode?0x8F8168:0xC9B896,{inkT:.03});
+  counter.position.set(0,1.15,3.3); colmado.add(counter);
+  const cbase=M(new THREE.BoxGeometry(6.2,1.05,.8),BASE,{inkT:.03});
+  cbase.position.set(0,.6,3.24); colmado.add(cbase);
+
+  // hand-painted sign board standing above the roof edge
+  const sign=M(new THREE.BoxGeometry(7.0,1.35,.18),nightMode?0xB08A22:0xF2C230,{inkT:.03});
+  sign.position.set(0,5.15,3.0); colmado.add(sign);
+  [4.44,5.86].forEach(y=>{
+    const edge=M(new THREE.BoxGeometry(7.2,.16,.22),nightMode?0x952C1F:0xD8412F,{ink:false});
+    edge.position.set(0,y,3.0); colmado.add(edge);
+  });
+  for(let i=0;i<7;i++){                                    // lettering, without needing a font
+    const L=M(new THREE.BoxGeometry(.34,.5,.06),nightMode?0x14293A:0x1D3B4E,{ink:false});
+    L.position.set(-2.4+i*.8,5.17,3.12); colmado.add(L);
   }
-  // counter window (open front, typical colmado)
-  const win=M(new THREE.BoxGeometry(4.4,1.7,.2), nightMode?0x1A2028:0x2F4858, {inkT:.03});
-  win.position.set(0,1.55,3.02); colmado.add(win);
-  const counter=M(new THREE.BoxGeometry(4.6,.9,.6), 0xE4DCC8, {inkT:.03});
-  counter.position.set(0,.95,3.3); colmado.add(counter);
-  // painted sign
-  const sign=M(new THREE.BoxGeometry(4.6,1.0,.15), 0xFFD23F, {inkT:.03});
-  sign.position.set(0,3.9,2.9); colmado.add(sign);
-  // crates of goods out front
-  for(let i=0;i<3;i++){
-    const crate=M(new THREE.BoxGeometry(.7,.6,.7), i%2?0xE63946:0x4FA88C, {inkT:.03});
-    crate.position.set(-3.2+i*.85, .3, 4.6); colmado.add(crate);
+  // painted side panel — crate red, no logo
+  const ad=M(new THREE.BoxGeometry(.16,2.4,4.0),nightMode?0x952C1F:0xD8412F,{inkT:.03});
+  ad.position.set(-5.0,2.4,-.4); colmado.add(ad);
+
+  // stacked crates, a gas cylinder, a bare bulb on a wire: standard colmado clutter
+  const crateCols=[0xD8412F,0xF2C230,0x2F7A4F];
+  for(let s=0;s<3;s++) for(let h=0;h<(s===1?3:2);h++){
+    const c=M(new THREE.BoxGeometry(.82,.54,.82),crateCols[(s+h)%3],{inkT:.03});
+    c.position.set(-3.6+s*1.0,.28+h*.56,4.3); colmado.add(c);
   }
+  const cyl=M(new THREE.CylinderGeometry(.32,.32,.9,10),nightMode?0x9A6E16:0xE0A020,{inkT:.04});
+  cyl.position.set(3.9,.45,4.1); colmado.add(cyl);
+  const bulb=new THREE.Mesh(new THREE.SphereGeometry(.15,8,6),new THREE.MeshBasicMaterial({color:0xFFE9A0}));
+  bulb.position.set(1.8,3.9,3.4); colmado.add(bulb);
+  if(nightMode){ const pl=new THREE.PointLight(0xFFD98A,.6,9); pl.position.copy(bulb.position); colmado.add(pl); }
+
   colmado.position.copy(colPos);
   scene.add(colmado); world.colmado=colmado;
 
@@ -427,6 +636,30 @@ function buildPalms(colPos){
   }
 }
 
+/* ---- power poles and the overhead wire tangle ----
+   As much a part of a DR street as the buildings are. Placed at x=-15, outside
+   the perimeter fence line (x=-13.5) that the security upgrades build, so the two
+   never collide however many fence tiers the player has bought. */
+function buildPowerLines(){
+  const tops=[];
+  [-4,9,22,35].forEach(z=>{
+    const pole=M(new THREE.CylinderGeometry(.18,.24,8,8),nightMode?0x5D5850:0x8A8378,{inkT:.03});
+    pole.position.set(-15,4,z); scene.add(pole);
+    const arm=M(new THREE.BoxGeometry(2.2,.16,.16),nightMode?0x4A463E:0x6E675C,{ink:false});
+    arm.position.set(-15,7.4,z); scene.add(arm);
+    tops.push(new THREE.Vector3(-15,7.4,z));
+  });
+  const wireM=new THREE.LineBasicMaterial({color:nightMode?0x0A0C10:0x1A1A1A});
+  for(let i=0;i<tops.length-1;i++) for(let k=0;k<4;k++){
+    const a=tops[i], b=tops[i+1], sag=.9+k*.18, off=(k-1.5)*.18, drop=k*.24, pts=[];
+    for(let s=0;s<=8;s++){
+      const t=s/8;
+      pts.push(new THREE.Vector3(a.x+off, a.y-drop-Math.sin(t*Math.PI)*sag, a.z+(b.z-a.z)*t));
+    }
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),wireM));
+  }
+}
+
 /* lighting — MeshToonMaterial sums each light's own step-shaded contribution, so
    ambient + sun + fill on an upward-facing surface (ground, driveway, car roofs —
    high N·L against all three at once) used to add past 1.0 and clip solid white.
@@ -570,6 +803,7 @@ function buildWorld(){
   buildStreetLights(colPos);
   buildWanderers(colPos);
   buildPalms(colPos);
+  buildPowerLines();
   buildLighting();
   buildSecurityProps();
   buildCar();
