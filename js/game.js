@@ -11,6 +11,9 @@ let controlMode='walk';
 let driveTarget=null, carYaw=0, carTargetYaw=0;
 const CAR_SPEED=14, CAR_TURN_RATE=4;
 
+/* 'orbit' (default third-person follow-cam) or 'first' — see toggleCameraMode() */
+let cameraMode='orbit';
+
 /* ---- shader: anime cel + rim ---- */
 /* ---- toon shading via three.js's built-in MeshToonMaterial ----
    No custom GLSL anywhere in this file. A hand-written shader that fails to
@@ -570,6 +573,11 @@ function buildWorld(){
   buildFoliage();
   buildPlayer();
   buildMarker();
+  // cameraMode persists across a MENU<->ENTER round trip (a deliberate preference,
+  // not session state) — re-apply it to the fresh player mesh and HUD button
+  updatePlayerVisibility();
+  const camBtn=document.getElementById('camModeBtn');
+  if(camBtn) camBtn.textContent = cameraMode==='orbit' ? '1ST PERSON' : '3RD PERSON';
 }
 
 /* ---- interaction spots ---- */
@@ -834,13 +842,27 @@ function tick(){
   }
 
   // camera follows whichever transform is under control — the car while driving,
-  // the player otherwise — everything else about the orbit-follow is unchanged
+  // the player otherwise. camYaw/camPitch (drag-controlled) mean different things
+  // depending on cameraMode: in orbit mode they place the camera behind the
+  // target; in first-person they ARE the look direction, from the target's eyes.
   const followPos=controlMode==='drive'?world.car.position:player.pos;
-  const tx=followPos.x-Math.sin(camYaw)*camDist*Math.cos(camPitch);
-  const tz=followPos.z-Math.cos(camYaw)*camDist*Math.cos(camPitch);
-  const ty=2.6+camDist*Math.sin(camPitch);
-  camera.position.lerp(new THREE.Vector3(tx,ty,tz), 1-Math.pow(.004,dt));
-  camera.lookAt(followPos.x,2.4,followPos.z);
+  if(cameraMode==='first'){
+    const eyeY=followPos.y+(controlMode==='drive'?2.0:2.9);
+    camera.position.set(followPos.x,eyeY,followPos.z);
+    // remap orbit's pitch range into a look up/down angle — inverted from camPitch's
+    // own sense (dragging up decreases camPitch, and should look up, not down)
+    const lookPitch=(0.44-camPitch)*1.2;
+    const fx=followPos.x+Math.sin(camYaw)*Math.cos(lookPitch)*5;
+    const fz=followPos.z+Math.cos(camYaw)*Math.cos(lookPitch)*5;
+    const fy=eyeY+Math.sin(lookPitch)*5;
+    camera.lookAt(fx,fy,fz);
+  } else {
+    const tx=followPos.x-Math.sin(camYaw)*camDist*Math.cos(camPitch);
+    const tz=followPos.z-Math.cos(camYaw)*camDist*Math.cos(camPitch);
+    const ty=2.6+camDist*Math.sin(camPitch);
+    camera.position.lerp(new THREE.Vector3(tx,ty,tz), 1-Math.pow(.004,dt));
+    camera.lookAt(followPos.x,2.4,followPos.z);
+  }
 
   if(world.dog){
     world.dog.position.x=-8+Math.sin(clock.elapsedTime*.5)*3.2;
@@ -949,10 +971,16 @@ function startWorld(){
   }
 }
 /* ---- drive mode ---- */
+// playerGroup is hidden whenever you wouldn't see it anyway — driving, or
+// looking through its own eyes in first-person — centralized so toggling
+// either mode never leaves it in a stale visibility state.
+function updatePlayerVisibility(){
+  playerGroup.visible = controlMode==='walk' && cameraMode!=='first';
+}
 function enterDriveMode(){
   if(!world.car||controlMode==='drive') return;
   controlMode='drive';
-  playerGroup.visible=false;
+  updatePlayerVisibility();
   moveTarget=null; driveTarget=null; marker.visible=false;
   // seed carYaw from the car's current (parked or previously-driven) rotation,
   // inverting the fixed model offset so the very first driven frame doesn't snap
@@ -967,10 +995,18 @@ function exitDriveMode(){
   // step out beside the car rather than reappearing on top of it
   player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
   player.yaw=player.targetYaw=carYaw;
-  playerGroup.visible=true;
+  updatePlayerVisibility();
   driveTarget=null; marker.visible=false;
   document.getElementById('exitVehicleBtn').style.display='none';
   const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO WALK · TAP THINGS TO USE · DRAG TO LOOK';
+}
+
+/* ---- camera mode ---- */
+function toggleCameraMode(){
+  cameraMode = cameraMode==='orbit' ? 'first' : 'orbit';
+  updatePlayerVisibility();
+  const btn=document.getElementById('camModeBtn');
+  if(btn) btn.textContent = cameraMode==='orbit' ? '1ST PERSON' : '3RD PERSON';
 }
 
 function backToTitle(){
