@@ -92,6 +92,15 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
   text-align:center;font-size:10px;color:rgba(233,231,218,.45);pointer-events:none;z-index:10;
   text-shadow:0 1px 3px rgba(0,0,0,.9);}
 
+/* zoom slider — third-person only, drag to pull the camera out for a wider,
+   more overhead "sim" framing; hidden in first-person where camDist is unused */
+#zoomWrap{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 44px);right:12px;
+  display:flex;align-items:center;gap:6px;z-index:10;
+  background:rgba(10,13,20,.6);border:1.5px solid rgba(233,231,218,.18);border-radius:20px;
+  padding:5px 10px;backdrop-filter:blur(6px);}
+#zoomWrap span{font-size:12px;}
+#zoomSlider{width:100px;accent-color:var(--moss);}
+
 .sheet{position:fixed;inset:0;z-index:600;display:none;align-items:flex-end;justify-content:center;
   background:rgba(6,9,13,.86);backdrop-filter:blur(5px);}
 .sheet.show{display:flex;}

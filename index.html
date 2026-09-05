@@ -52,6 +52,10 @@
     <button onclick="useTarget()">USE</button>
   </div>
   <div id="hint">TAP GROUND TO WALK · TAP THINGS TO USE · DRAG TO LOOK</div>
+  <div id="zoomWrap">
+    <span>🔍</span>
+    <input type="range" id="zoomSlider" min="6" max="30" step="0.5" value="9.5" oninput="setZoom(this.value)">
+  </div>
 </div>
 
 <div class="sheet" id="sheet"><div class="sc">

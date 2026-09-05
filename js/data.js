@@ -27,7 +27,7 @@ const VITALS=[
 
 function blank(){
   return {
-    log:{}, workout:{}, diet:{}, water:{},
+    log:{}, workout:{}, diet:{}, water:{}, perfectDone:{},
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
@@ -40,6 +40,12 @@ function migrate(obj){ const b=blank(); for(const k in b) if(obj[k]===undefined)
 let S;
 try{ S=migrate(JSON.parse(localStorage.getItem(KEY))||blank()); }catch(e){ S=blank(); }
 function save(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){ showErr('Save failed: '+e.message); } }
+// every mutation site already calls save() itself right after changing S, but this is
+// a cheap backstop against ever losing progress to a spot that forgets to — a mobile
+// browser can background/kill a tab at any point, so catch that moment explicitly
+// rather than trusting every future S-mutating change to remember the explicit call.
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) save(); });
+window.addEventListener('pagehide', save);
 
 /* ---- backup/restore: localStorage is the ONLY copy of progress — a cleared
    browser, a private window, or a new device loses everything with no server
@@ -129,10 +135,39 @@ function earn(kind, el){
 }
 function xpNeed(){ return Math.round(100*Math.pow(1.18,S.level-1)); }
 
+/* ---- undo: mirrors earn() exactly in reverse, for accidental taps. Recomputes
+   the same PAY[kind]*mult() rather than storing the original amount — mult()
+   only depends on streaks, which don't change between logging something and
+   immediately undoing it, so this stays exact for the "I tapped by mistake"
+   case this exists for. Does NOT claw back an already-awarded perfect-day
+   bonus (see checkPerfectDay/S.perfectDone) — undoing one habit after a
+   perfect day already paid out isn't "this never happened," just "changed my
+   mind about today," so the bonus stands. */
+function unearn(kind, el){
+  const p=PAY[kind]; if(!p) return;
+  const m=mult();
+  const c=Math.round(p*m);
+  S.cash=Math.max(0,S.cash-c); S.lifetime=Math.max(0,S.lifetime-c);
+  if(kind==='workout'||kind==='perfect'){
+    const st=kind==='perfect'?6:1; S.standing=Math.max(0,S.standing-st);
+  }
+  S.xp-=Math.round(p*m*0.8);
+  while(S.xp<0){
+    if(S.level<=1){ S.xp=0; break; }
+    S.level--; S.xp+=xpNeed();
+  }
+  save();
+  float('-'+c+'💵', el, '#E63946');
+}
+
 function toggleHabit(id, el){
   const k=today();
   S.log[k]=S.log[k]||{};
-  if(S.log[k][id]) return false;
+  if(S.log[k][id]){
+    delete S.log[k][id];
+    unearn('habit', el);
+    return true;
+  }
   S.log[k][id]=true;
   earn('habit', el);
   checkPerfectDay(el);
@@ -140,7 +175,11 @@ function toggleHabit(id, el){
 }
 function markWorkout(el){
   const k=today();
-  if(S.workout[k]==='done') return false;
+  if(S.workout[k]==='done'){
+    delete S.workout[k];
+    unearn('workout', el);
+    return true;
+  }
   S.workout[k]='done'; earn('workout', el); save(); return true;
 }
 
@@ -154,18 +193,32 @@ function logCounter(field, target, payKind, el){
   S[field][k].push(Date.now());
   earn(payKind, el); save(); return true;
 }
+function unlogCounter(field, payKind, el){
+  const k=today();
+  if(!S[field][k]||!S[field][k].length) return false;
+  S[field][k].pop();
+  unearn(payKind, el);
+  return true;
+}
 function logMeal(el){ return logCounter('diet', DIET_TARGET, 'diet', el); }
+function unlogMeal(el){ return unlogCounter('diet', 'diet', el); }
 function logWater(el){
   const done=logCounter('water', WATER_TARGET, 'water', el);
   if(done) checkPerfectDay(el);
   return done;
 }
+function unlogWater(el){ return unlogCounter('water', 'water', el); }
 
 /* ---- perfect day: every boolean habit AND today's water target, since water
-   used to be one of HABITS itself before it became a counter ---- */
+   used to be one of HABITS itself before it became a counter. S.perfectDone
+   guards against re-earning it by undoing and redoing a habit/cup on a day
+   it already paid out — undo doesn't claw the bonus back (see unearn()), so
+   without this a habit could be toggled off and back on for free cash. ---- */
 function checkPerfectDay(el){
   const k=today(), lg=S.log[k]||{};
+  if(S.perfectDone[k]) return;
   if(HABITS.every(h=>lg[h.id]) && (S.water[k]||[]).length>=WATER_TARGET){
+    S.perfectDone[k]=true; save();
     setTimeout(()=>{ earn('perfect', el); toast('PERFECT DAY'); impact('PERFECT!'); },320);
   }
 }

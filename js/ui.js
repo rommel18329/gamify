@@ -64,7 +64,9 @@ function openLog(){
   let html='';
   const cups=(S.water[k]||[]).length, cupsDone=cups>=WATER_TARGET;
   html+='<div class="row'+(cupsDone?' done':'')+'" '+(cupsDone?'':'onclick="onWaterTap(this)"')+'>'+
-    '<div class="ck">'+(cupsDone?'✓':cups)+'</div><div class="nm">💧 Drink a cup of water ('+cups+'/'+WATER_TARGET+')</div></div>';
+    '<div class="ck">'+(cupsDone?'✓':cups)+'</div><div class="nm">💧 Drink a cup of water ('+cups+'/'+WATER_TARGET+')</div>'+
+    (cups>0?'<button class="gb sm" onclick="event.stopPropagation();onWaterUndoTap(this)">UNDO</button>':'')+
+    '</div>';
   HABITS.forEach(h=>{
     const done=!!lg[h.id];
     html+='<div class="row'+(done?' done':'')+'" onclick="onHabitTap(this,\''+h.id+'\')">'+
@@ -77,7 +79,9 @@ function openLog(){
   }
   const meals=(S.diet[k]||[]).length, mealsDone=meals>=DIET_TARGET;
   html+='<div class="row'+(mealsDone?' done':'')+'" '+(mealsDone?'':'onclick="onMealTap(this)"')+'>'+
-    '<div class="ck">'+(mealsDone?'✓':meals)+'</div><div class="nm">🍎 Log a real meal ('+meals+'/'+DIET_TARGET+')</div></div>';
+    '<div class="ck">'+(mealsDone?'✓':meals)+'</div><div class="nm">🍎 Log a real meal ('+meals+'/'+DIET_TARGET+')</div>'+
+    (meals>0?'<button class="gb sm" onclick="event.stopPropagation();onMealUndoTap(this)">UNDO</button>':'')+
+    '</div>';
   document.getElementById('sheetBody').innerHTML=html;
   openSheet('LOG TODAY — 💵 '+S.cash.toLocaleString());
 }
@@ -90,8 +94,14 @@ function onWorkoutTap(el){
 function onMealTap(el){
   if(logMeal(el)){ renderVitals(); openLog(); }
 }
+function onMealUndoTap(el){
+  if(unlogMeal(el)){ renderVitals(); openLog(); }
+}
 function onWaterTap(el){
   if(logWater(el)){ renderVitals(); openLog(); }
+}
+function onWaterUndoTap(el){
+  if(unlogWater(el)){ renderVitals(); openLog(); }
 }
 
 /* ---- security sheet ---- */
