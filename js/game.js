@@ -574,10 +574,9 @@ function buildWorld(){
   buildPlayer();
   buildMarker();
   // cameraMode persists across a MENU<->ENTER round trip (a deliberate preference,
-  // not session state) — re-apply it to the fresh player mesh and HUD button
+  // not session state) — re-apply it to the fresh player mesh and HUD
   updatePlayerVisibility();
-  const camBtn=document.getElementById('camModeBtn');
-  if(camBtn) camBtn.textContent = cameraMode==='orbit' ? '1ST PERSON' : '3RD PERSON';
+  syncCameraModeUI();
 }
 
 /* ---- interaction spots ---- */
@@ -1005,9 +1004,17 @@ function exitDriveMode(){
 function toggleCameraMode(){
   cameraMode = cameraMode==='orbit' ? 'first' : 'orbit';
   updatePlayerVisibility();
+  syncCameraModeUI();
+}
+// button label + zoom slider (camDist is meaningless in first-person) both
+// follow cameraMode — kept in one place so buildWorld() and the toggle can't drift
+function syncCameraModeUI(){
   const btn=document.getElementById('camModeBtn');
   if(btn) btn.textContent = cameraMode==='orbit' ? '1ST PERSON' : '3RD PERSON';
+  const zoom=document.getElementById('zoomWrap');
+  if(zoom) zoom.style.display = cameraMode==='orbit' ? 'flex' : 'none';
 }
+function setZoom(v){ camDist=parseFloat(v); }
 
 function backToTitle(){
   running=false; if(raf) cancelAnimationFrame(raf);

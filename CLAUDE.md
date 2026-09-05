@@ -88,7 +88,21 @@ paired with the water-target check by hand, since water used to be one of
 
 Money and "standing" only ever move through `earn()` — it applies the
 streak multiplier, XP, and level-ups in one place. Don't add cash/standing
-anywhere else.
+anywhere else. `unearn()` is its exact mirror for undoing an accidental log
+(tapping a checked habit/workout again, or the UNDO button on a counter
+row) — it recomputes the same `PAY[kind]*mult()` rather than storing what
+was actually paid out, which is only exact if nothing else changes between
+logging and undoing it. That's fine for the "I tapped by mistake, fix it
+right now" case this exists for; it is not a general ledger.
+
+`S.perfectDone[today]` exists purely to stop the perfect-day bonus from
+being farmed: `unearn()` deliberately does *not* claw back a bonus that
+already paid out (undoing one habit after a perfect day shouldn't erase the
+day), which means without a flag, toggling a habit off and back on after
+completing a perfect day would trigger `checkPerfectDay()` again and pay
+the +140 a second time. Any new way to "uncomplete" a day's requirement
+needs to keep going through `checkPerfectDay()`, not reimplement the
+every-habit-plus-water check inline, or it'll bypass this guard.
 
 ## Backup
 
@@ -96,6 +110,14 @@ anywhere else.
 `importSave()` in `data.js` and the BACKUP SAVE sheet in `ui.js` exist so a
 player can get a copy out. Don't remove that path; if you change `S`'s shape,
 `importSave()`'s call to `migrate()` should keep old backups loadable.
+
+Every mutation site already calls `save()` itself right after changing `S`
+(that's the actual persistence — keep doing this for anything new), but
+`data.js` also calls `save()` on `visibilitychange`/`pagehide` as a backstop
+in case a future change ever forgets to, since a mobile browser can
+background or kill the tab at any point. If progress ever doesn't survive
+a session, check for a spot that mutates `S` without calling `save()`
+before assuming the backstop itself is broken.
 
 ## Rendering conventions (anime/toon look)
 
@@ -163,6 +185,13 @@ orbit while still driving must NOT reveal the player). `cameraMode` is a
 deliberate preference, not session state — it persists across a
 MENU→ENTER round trip on purpose, so `backToTitle()` resets `controlMode`
 but not this.
+
+`camDist` (default `9.5`) is adjustable at runtime via the `#zoomSlider` HUD
+control (`setZoom()`) for a wider, more pulled-back third-person framing —
+it's meaningless in first-person, so `syncCameraModeUI()` hides the slider
+whenever `cameraMode==='first'` alongside flipping the HUD button label;
+add anything else that only makes sense in one camera mode to that same
+function rather than scattering `cameraMode` checks around.
 
 ## Movement & driving
 
