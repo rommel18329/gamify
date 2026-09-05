@@ -43,6 +43,9 @@ css/styles.css       all styling
 js/errors.js         window.onerror -> visible on-screen error box (loads first)
 js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
+js/models.js         loads the CC0 rigged characters + car, recolours them into
+                     outfits, drives their animation mixers
+assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl)
 js/game.js           the 3D scene: world building (one function per structure —
                      buildHouse/buildGarage/buildColmado/etc., all called from
                      buildWorld()), character/car/prop meshes, camera, input,
@@ -118,6 +121,37 @@ in case a future change ever forgets to, since a mobile browser can
 background or kill the tab at any point. If progress ever doesn't survive
 a session, check for a spot that mutates `S` without calling `save()`
 before assuming the backstop itself is broken.
+
+## Models (`js/models.js`, `assets/`)
+
+People and the car are real rigged models: Quaternius "Ultimate Modular Men"
+(**CC0 1.0**, verified from the pack's own `License.txt` — no attribution
+required) plus a CC0 car. The hand-built `makePerson()`/`makeCar()` primitives
+are still there as a **fallback**: every call site is
+`modelPerson(...)||makePerson(...)`, and `loadAssets()` always fires its
+callback even when a download fails, so a broken asset costs you the good
+characters — never a black screen or a hung loading screen. Don't remove that
+fallback path.
+
+Three things bite here, all of them already fixed once:
+
+- **Clone with `THREE.SkeletonUtils.clone()`, never `.clone()`.** A plain clone
+  shares the skeleton, so every NPC would animate in lockstep.
+- **Cloned models SHARE geometry with the cached source in `ASSETS`.** That's
+  why `modelPerson()`/`modelCar()` tag their subtrees `userData.sharedGeo` and
+  `backToTitle()` skips disposing flagged geometry — disposing it gutted the
+  cache and the *second* ENTER rendered nothing. Materials are per-instance
+  clones (that's what makes recolouring one person not repaint everybody), so
+  those are still disposed. Also note a mesh's `.material` can be an **array**
+  on loaded models, which has no `.dispose()` of its own.
+- **Every mixer must be ticked every frame**, standing characters included —
+  `updateAnimated(dt)` in `tick()` does this. A mixer that never updates leaves
+  its model frozen in the bind pose (a T-pose), which reads as a hard crash.
+
+Outfits come from `FITS` in `js/models.js`, keyed by each model's own material
+names (`Skin`, `Hair`, `Purple`, …). Material names differ per model and
+unknown keys are ignored, so one colour swap turns a couple of downloads into a
+whole block of different-looking people.
 
 ## Rendering conventions (anime/toon look)
 
