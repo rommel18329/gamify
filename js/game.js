@@ -355,13 +355,17 @@ function buildDominoScene(colPos){
     const seatAngle=Math.atan2(-dx,-dz);
     const sx=dTable.position.x+dx*1.55, sz=dTable.position.z+dz*1.55;
     monoblocChair(sx, sz, seatAngle);
-    const p=makePerson(shirt, skin, .5, {tank:shirt, jean:0x232833, bling:false, hair:0x14100C});
-    // seated pose: bend legs, lower torso
-    p.userData.legL.rotation.x=-1.35; p.userData.legR.rotation.x=-1.35;
-    p.userData.armL.rotation.x=-0.5; p.userData.armR.rotation.x=-0.5;
-    p.position.set(sx, 0, sz);
+    const p=modelPerson()||makePerson(shirt, skin, .5, {tank:shirt, jean:0x232833, bling:false, hair:0x14100C});
+    if(p.userData.mixer){
+      // rigged characters idle standing around the table (the rig has no sit clip)
+      p.position.set(sx+dx*.35, 0, sz+dz*.35);
+    }else{
+      // primitive fallback can be posed by hand: seated, legs bent, dropped onto the chair
+      p.userData.legL.rotation.x=-1.35; p.userData.legR.rotation.x=-1.35;
+      p.userData.armL.rotation.x=-0.5; p.userData.armR.rotation.x=-0.5;
+      p.position.set(sx, -.28, sz);
+    }
     p.rotation.y=seatAngle;
-    p.position.y=-.28; // seated height drop, resting on chair seat
     scene.add(p); dominoNPCs.push(p);
   });
   world.dominoNPCs=dominoNPCs;
@@ -391,7 +395,7 @@ function buildWanderers(colPos){
   for(let i=0;i<5;i++){
     const skin=[0x8D5524,0xC9884F,0x6B4226,0xA8703E,0x5C3A21][i];
     const shirt=[0xE63946,0x4FA88C,0xFFD23F,0xE9E7DA,0x2F4858][i];
-    const p=makePerson(shirt, skin, Math.random()*.4, {tank:shirt, jean:0x232833, bling:false, hair:0x14100C});
+    const p=modelPerson()||makePerson(shirt, skin, Math.random()*.4, {tank:shirt, jean:0x232833, bling:false, hair:0x14100C});
     const a=Math.random()*Math.PI*2, r=8+Math.random()*5;
     p.position.set(colPos.x+Math.cos(a)*r, 0, colPos.z+7+Math.sin(a)*r);
     p.userData.center=new THREE.Vector3(colPos.x,0,colPos.z+7);
@@ -479,7 +483,7 @@ function buildSecurityProps(){
     d.position.set(-8,0,6); scene.add(d); world.dog=d;
   }
   if(sec.detail>0){
-    const guard=makePerson(0x1A2028,0xC9884F,.62,{hair:0x14100C});
+    const guard=modelPerson()||makePerson(0x1A2028,0xC9884F,.62,{hair:0x14100C});
     guard.position.set(4.5,0,9); guard.rotation.y=-.6;
     scene.add(guard); world.guard=guard;
   }
@@ -490,7 +494,7 @@ function buildSecurityProps(){
    is also used by spots() and rebuildCar() so all three stay in sync. */
 const CAR_SPOT=new THREE.Vector3(9,0,4), CAR_ROT_OFFSET=Math.PI/2;
 function buildCar(){
-  world.car=makeCar();
+  world.car=modelCar(S.vehicle.paint)||makeCar();
   world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
   scene.add(world.car);
 }
@@ -525,7 +529,7 @@ function buildFoliage(){
 /* player */
 function buildPlayer(){
   const per=S.person;
-  playerGroup=makePerson(0x7C3AED, per.skin, physiqueLocal(), {tank:0xF3F1E7, jean:0x7C3AED, bling:true, shorts:true});
+  playerGroup=modelPerson(FITS[0])||makePerson(0x7C3AED, per.skin, physiqueLocal(), {tank:0xF3F1E7, jean:0x7C3AED, bling:true, shorts:true});
   // spawn on the walkway (walk plane spans z 1..13), close enough to the house that the
   // default over-the-shoulder camera (camYaw=PI, ~9.5 units behind the player) settles
   // in open street — at the old z=14 spawn it converged to roughly z=23, which sat
@@ -615,7 +619,8 @@ function spawnIntruders(){
   const inc=S.incident; if(!inc||inc.done) return;
   const n=Math.max(2,Math.ceil(inc.p/26));
   for(let i=0;i<n;i++){
-    const f=makePerson(0x161A21,0x8D5524,.4,{hair:0x0E0C0A});
+    const f=modelPerson({model:'hoodie',Purple:0x14161B,White:0x1A1D24,LightBlue:0x0E0E12,Hair:0x0E0C0A,Skin:0x6B4226})
+            ||makePerson(0x161A21,0x8D5524,.4,{hair:0x0E0C0A});
     const a=Math.random()*Math.PI*2, r=26+Math.random()*8;
     f.position.set(Math.cos(a)*r,0,Math.sin(a)*r);
     f.userData.resolve=50+inc.p*.5; f.userData.max=f.userData.resolve; f.userData.spotted=false; f.userData.wt=0;
@@ -632,10 +637,12 @@ function updateWanderers(dt){
     const dx=nx-p.position.x, dz=nz-p.position.z;
     p.rotation.y=Math.atan2(dx,dz);
     p.position.x=nx; p.position.z=nz;
-    p.userData.wt+=dt*6;
-    const sw=Math.sin(p.userData.wt)*.4;
-    p.userData.legL.rotation.x=sw; p.userData.legR.rotation.x=-sw;
-    p.userData.armL.rotation.x=-sw*.6; p.userData.armR.rotation.x=sw*.6;
+    if(!stepAnim(p,true)){
+      p.userData.wt+=dt*6;
+      const sw=Math.sin(p.userData.wt)*.4;
+      p.userData.legL.rotation.x=sw; p.userData.legR.rotation.x=-sw;
+      p.userData.armL.rotation.x=-sw*.6; p.userData.armR.rotation.x=sw*.6;
+    }
   });
 }
 
@@ -700,10 +707,13 @@ function updateIntruders(dt){
     if(d>4){
       const a=Math.atan2(-f.position.z,-f.position.x);
       f.position.x+=Math.cos(a)*dt*1.8; f.position.z+=Math.sin(a)*dt*1.8;
-      f.rotation.y=-a+Math.PI/2; f.userData.wt+=dt*7;
-      const sw=Math.sin(f.userData.wt)*.55;
-      f.userData.legL.rotation.x=sw; f.userData.legR.rotation.x=-sw;
-      f.userData.armL.rotation.x=-sw*.8; f.userData.armR.rotation.x=sw*.8;
+      f.rotation.y=-a+Math.PI/2;
+      if(!stepAnim(f,true)){
+        f.userData.wt+=dt*7;
+        const sw=Math.sin(f.userData.wt)*.55;
+        f.userData.legL.rotation.x=sw; f.userData.legR.rotation.x=-sw;
+        f.userData.armL.rotation.x=-sw*.8; f.userData.armR.rotation.x=sw*.8;
+      }
     }
     f.visible=f.userData.spotted||d<13;
   });
@@ -827,11 +837,13 @@ function tick(){
 
     playerGroup.position.set(player.pos.x,0,player.pos.z);
     playerGroup.rotation.y=player.yaw;
-    const ud=playerGroup.userData;
-    const sw=Math.sin(player.walkT)*(moving?.72:.05);
-    ud.legL.rotation.x=sw; ud.legR.rotation.x=-sw;
-    ud.armL.rotation.x=-sw*.85; ud.armR.rotation.x=sw*.85;
-    playerGroup.position.y=moving?Math.abs(Math.sin(player.walkT))*.055:0;
+    if(!stepAnim(playerGroup,moving)){
+      const ud=playerGroup.userData;
+      const sw=Math.sin(player.walkT)*(moving?.72:.05);
+      ud.legL.rotation.x=sw; ud.legR.rotation.x=-sw;
+      ud.armL.rotation.x=-sw*.85; ud.armR.rotation.x=sw*.85;
+      playerGroup.position.y=moving?Math.abs(Math.sin(player.walkT))*.055:0;
+    }
   }
 
   if(marker.visible){
@@ -867,6 +879,7 @@ function tick(){
     world.dog.position.x=-8+Math.sin(clock.elapsedTime*.5)*3.2;
     world.dog.rotation.y=Math.cos(clock.elapsedTime*.5)>0?0:Math.PI;
   }
+  updateAnimated(dt);   // every rigged character, moving or standing
   updateIntruders(dt);
   updateWanderers(dt);
   if(controlMode==='walk') checkInteract();
@@ -927,7 +940,12 @@ function enterWorld(){
     openTitle();
     return;
   }
-  setTimeout(startWorld,50);
+  // pull the rigged character/vehicle models in before building the world. This
+  // always calls back — a failed download just means the primitive fallbacks get
+  // used, never a hang on the loading screen.
+  const boot=document.getElementById('boot').querySelector('p');
+  if(boot&&!ASSETS.tried) boot.textContent='Loading models…';
+  loadAssets(()=>{ if(boot) boot.textContent='Loading'; setTimeout(startWorld,50); });
 }
 let contextLost=false;
 function startWorld(){
@@ -1021,14 +1039,22 @@ function backToTitle(){
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
   controlMode='walk'; driveTarget=null;
+  clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   if(scene){
-    // every material here is a fresh instance from M()/inline THREE.Mesh calls (never
-    // shared, except the module-level TOON_GRADIENT texture, which stays alive on
-    // purpose) — dispose them on exit or repeated title<->world trips leak GPU memory.
+    // Dispose on exit or repeated title<->world trips leak GPU memory. Two things
+    // to be careful about now that loaded models are in the scene:
+    //  - a mesh's .material can be an ARRAY (multi-material models), which has no
+    //    .dispose() of its own;
+    //  - SkeletonUtils.clone() SHARES geometry with the cached source model, so
+    //    disposing it would gut ASSETS and the next ENTER would render nothing.
+    //    modelPerson()/modelCar() flag their clones (sharedGeo) for exactly this.
+    //    Their materials are per-instance clones, so those still get freed.
     scene.traverse(o=>{
-      if(o.geometry) o.geometry.dispose();
-      if(o.material) o.material.dispose();
+      if(o.geometry&&!(o.userData&&o.userData.sharedGeo)) o.geometry.dispose();
+      const m=o.material;
+      if(Array.isArray(m)) m.forEach(x=>{ if(x&&x.dispose) x.dispose(); });
+      else if(m&&m.dispose) m.dispose();
     });
     scene=null;
   }
