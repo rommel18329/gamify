@@ -43,6 +43,8 @@ css/styles.css       all styling
 js/errors.js         window.onerror -> visible on-screen error box (loads first)
 js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
+js/carphysics.js     standalone car physics engine (no THREE, no DOM) — see
+                     "Car physics" below
 js/models.js         loads the CC0 rigged characters + car, recolours them into
                      outfits, drives their animation mixers
 assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl)
@@ -297,22 +299,59 @@ once it's driveable.
 Driving does **not** reuse `seekTarget()` — a car moving in a straight line
 directly toward the tapped point regardless of which way it's facing reads
 as crabbing sideways into its own turns, since a vehicle can only actually
-move along its own heading. `driveCar(dt)` in `js/game.js` instead runs a
-small "bicycle model" (the standard simplification used by most simple
-arcade car physics — see e.g. `oseiskar/js-car` on GitHub, MIT, which
-frames a car as "a motorcycle that does not bank"): `carSpeed` eases toward
-a target speed via `CAR_ACCEL`/`CAR_BRAKE` instead of snapping to it, the
-car always moves forward (or backward) along its *own* `carYaw`, and
-steering authority (`CAR_TURN_RATE_LOW` at rest down to `CAR_TURN_RATE_HIGH`
-at `CAR_MAX_SPEED`) shrinks as speed rises — the same reason a real car
-can pivot tightly in a parking lot but needs a wide arc at speed. Tapping a
-point more than `CAR_REVERSE_ANGLE` radians behind the car's current
-heading reverses into it (`CAR_REVERSE_SPEED`) rather than trying to steer
-a forward-only vehicle through a U-turn on the spot. If you retune any of
-these constants, re-run `checkphysics.js`-style trail logging (sample
-`world.car.position` every frame while driving to a point off to one side)
-and confirm the path curves smoothly rather than snapping — that was the
-whole point of replacing `seekTarget()` here.
+move along its own heading.
+
+`js/carphysics.js` is a real, dependency-free port of the 2D rigid-body car
+model from `oseiskar/js-car` on GitHub (MIT) — not a hand-tuned accelerate/
+steer approximation. Each frame it solves the exact front/rear contact
+forces needed to keep both axle centers from sliding sideways (a coupled
+2x2 system, solved with Cramer's rule — the source uses mathjs for this,
+which isn't needed since the mass/inertia matrix is diagonal and trivial to
+invert by hand; that's the only thing "ported" rather than vendored
+verbatim, every equation is the source's own), then checks whether either
+axle's required force exceeds its friction limit. If it does, that axle
+slips and its force is capped at the lower dynamic-friction limit instead —
+this is what produces real loss-of-grip on a too-sharp turn at speed, an
+emergent result of the solve, not a scripted "turn slower when fast" rule.
+
+**Tuning gotcha, already hit once:** the source's `maxThrust` formula
+(`mass*thrustFrac*gravity*0.5`) and its slip check aren't independent —
+thrust is bundled into the back axle's force for the purpose of that check,
+so a `thrustFrac` at or above `staticFriction` means the rear "tires" are
+permanently past their grip limit under any throttle at all, i.e. permanent
+wheelspin, and every frame gets force-capped at the much lower
+`dynamicFriction`-based limit regardless of the requested thrust — measured
+result: the car topped out around 2 units/s instead of the ~14 the
+`dragFrac`/`thrustFrac` pair was meant to produce. Keep `thrustFrac`
+comfortably under `staticFriction` so straight-line acceleration stays in
+the no-slip regime; top speed is then `thrustFrac*gravity*0.5/dragFrac`,
+independent of `mass` (it cancels — `mass` only affects rotational
+response, via `MoI`). If you retune these, verify numerically first —
+`node -e "eval(require('fs').readFileSync('js/carphysics.js','utf8')); const c=new CarPhysics({length:9.6,width:4}); for(let i=0;i<360;i++) c.move(1/60,{throttle:1,wheelTurnSpeed:0}); console.log(c.getSpeed())"`
+— rather than only judging it by feel in the browser.
+
+`driveCar(dt)` in `js/game.js` feeds `carPhys.move()` its two inputs —
+`throttle` and `wheelTurnSpeed` — from whichever control is active:
+WASD/arrow keys (`driveKeys`, set by `setDriveKey()`) map directly onto
+them like a real pedal and steering wheel; tap-to-drive (`driveTarget`,
+still the touch fallback) instead runs a small steering controller each
+frame that computes the wheel angle and throttle needed to head toward the
+tapped point, so both control schemes drive the exact same physics rather
+than one being a simplified stand-in for the other. Any drive key going
+down clears a pending `driveTarget` so the two never fight over the wheel.
+`carPhys.pos`/`.rot` ARE `world.car`'s position and yaw (`CAR_ROT_OFFSET`
+still applies on top, same as before) — `enterDriveMode()` re-seeds them
+from the car's current transform and zeroes velocity/wheel angle so a
+stale drive never carries momentum into a fresh one.
+
+`CAR_LENGTH` (`js/game.js`) is the one source of truth for the car's size —
+both `modelCar()` (`js/models.js`) and the primitive fallback `makeCar()`
+scale to it, and `CAR_RADIUS` (used by collision, below) is derived from it
+too. It was previously hardcoded to `4.7`, barely 1.2x the fixed 4-unit
+player height — a car you could nearly look level with. It's `9.6` now
+(2.4x), landing in a believable real-car-vs-a-person range; if you ever
+retune it, sanity-check the ratio the same way rather than picking a
+number that merely "looks OK" from one angle.
 
 ## Collision
 
@@ -323,15 +362,45 @@ axis-aligned box per building (house, garage, colmado — the colmado's box
 is padded further on its street-facing side than its actual wall, to also
 block the counter/crates/gas-cylinder clutter sitting in front of it) built
 from the same numbers `buildHouse()`/`buildGarage()`/`buildColmado()` use,
-plus `COLMADO_POS`, so the two can't drift apart independently. `tick()`
-calls it for both the walking player (`PLAYER_RADIUS`) and the driven car
-(`CAR_RADIUS`) every frame; a hit cancels the pending `moveTarget`/
-`driveTarget` (and zeroes `carSpeed`) rather than leaving the seek logic
-pushing into the wall every frame, which would otherwise jitter the
-position back and forth against it. Porch columns, awnings and the domino
-table are deliberately NOT collidable — thin single posts, not walls, and
-colliding with every one of them would make walking near the house feel
-like fighting the geometry.
+plus `COLMADO_POS`, so the two can't drift apart independently. `tick()`/
+`driveCar()` call it for both the walking player (`PLAYER_RADIUS`) and the
+driven car (`CAR_RADIUS`) every frame; a hit cancels the pending
+`moveTarget`/`driveTarget` (and, for the car, zeroes `carPhys.v`/`.vrot`)
+rather than leaving the seek/steering logic pushing into the wall every
+frame, which would otherwise jitter the position back and forth against
+it. Porch columns, awnings and the domino table are deliberately NOT
+collidable — thin single posts, not walls, and colliding with every one of
+them would make walking near the house feel like fighting the geometry.
+
+## Streets
+
+`buildStreets()` in `js/game.js` builds two named, gray-paved streets —
+`AV. INDEPENDENCIA` (the main through avenue, reusing the exact x the
+driveway/garage/`CAR_SPOT` have always used, just extended much further in
+z so there's real room to drive) and `C. MARGINAL` (crossing it between the
+house and the colmado) — loosely modeled on a real Santo Domingo
+intersection the owner shared, with a legible sign at each. This is a
+stylized approximation, not a traced map: real street angles/curves are
+collapsed onto the existing north-south/east-west grid rather than modeled
+as diagonals, since a rotated road would need its own rotated collision
+box, UV-rotated texture handling, and road-following logic nothing else in
+the world has.
+
+`streetSign()` builds each sign as **two single-sided plates back to
+back**, not one plate with a `DoubleSide` material — a `DoubleSide`
+material mirrors the same texture onto its back face, which read as
+reversed, unreadable text to traffic approaching from the other direction
+the first time this was built. If you add another sign, copy that pattern
+rather than reaching for `DoubleSide` on a textured plane.
+
+`COLMADO_POS` sits west of the avenue and further out in z than the
+house/garage specifically to leave `C. MARGINAL` a clear gap to cross
+through without slicing into either the colmado's own collider or the
+security-fence perimeter (`buildSecurityProps()`'s `sec.doors` posts) — if
+you move any of the three, re-check all three still clear each other.
+Moving the colmado further from spawn is always safe for the
+camera-clipping concern in Camera above (it only widens that margin);
+moving it *closer* is the direction that needs re-verifying.
 
 ## Known deliberate non-features
 
