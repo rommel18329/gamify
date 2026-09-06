@@ -129,7 +129,7 @@ function modelCar(paint){
   g.traverse(o=>{ o.userData.sharedGeo=true; });   // geometry belongs to ASSETS, not this clone
   const box=new THREE.Box3().setFromObject(g);
   const len=Math.max(box.max.x-box.min.x, box.max.z-box.min.z, .001);
-  g.scale.setScalar(4.7/len);           // match the primitive car's ~4.7-unit length
+  g.scale.setScalar(CAR_LENGTH/len);   // CAR_LENGTH (js/game.js) is the one source of truth for car size
   g.traverse(o=>{
     if(!o.isMesh||!o.material) return;
     o.material=Array.isArray(o.material)?o.material.map(m=>m.clone()):o.material.clone();

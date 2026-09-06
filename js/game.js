@@ -8,24 +8,21 @@ let drag={down:false,moved:false,x:0,y:0,t:0,id:null};
 
 /* 'walk' (default) or 'drive' — see enterDriveMode()/exitDriveMode() */
 let controlMode='walk';
-let driveTarget=null, carYaw=0, carTargetYaw=0, carSpeed=0;
-/* Arcade car physics — the car accelerates/brakes toward a target speed and
-   steers toward its target heading at a rate that shrinks with speed, the
-   same two building blocks used by every simple "bicycle model" car (see
-   e.g. oseiskar/js-car on GitHub, MIT — a two-axle simplification of the
-   same idea): a real car can pivot tightly standing still but can't snap its
-   heading at speed, and it takes a beat to get up to speed or stop rather
-   than teleporting there. Tapping a point roughly behind the car reverses
-   into it instead of trying to steer a car forward through a U-turn on the
-   spot. Replaces the previous model, where the car moved in a straight line
-   directly toward the tapped point every frame regardless of which way it
-   was facing — visually that read as the car crabbing sideways into its own
-   turns instead of driving into them. */
-const CAR_MAX_SPEED=14, CAR_REVERSE_SPEED=7.5;
-const CAR_ACCEL=16, CAR_BRAKE=24;
-const CAR_TURN_RATE_LOW=3.0, CAR_TURN_RATE_HIGH=1.05;   // rad/s at rest vs at CAR_MAX_SPEED
-const CAR_ARRIVE_DIST=1.0, CAR_REVERSE_ANGLE=2.2;       // radians (~126°) — "target is behind" cutoff
-const PLAYER_RADIUS=0.5, CAR_RADIUS=1.15;
+let driveTarget=null;
+/* Real car physics via CarPhysics (js/carphysics.js) — a dependency-free port
+   of oseiskar/js-car's front/rear-axle constraint solver, not a hand-tuned
+   accelerate/steer approximation. carPhys.pos/.rot ARE world.car's position
+   and yaw; see driveCar() below for how it's driven (WASD/arrows directly,
+   or a small steering controller when following a tap-to-drive target). */
+let carPhys=null;
+const CAR_LENGTH=9.6, CAR_WIDTH=CAR_LENGTH*0.42;
+const CAR_ARRIVE_DIST=1.2, CAR_REVERSE_ANGLE=2.2;   // radians (~126°) — "target is behind" cutoff
+const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;
+/* WASD/arrow keys drive the car directly — tap-to-drive (touch) still works
+   as a fallback and the two never fight: any drive key going down cancels
+   the pending tap target, and tapping the ground while no key is held goes
+   back to steering toward that point. */
+const driveKeys={fwd:false,back:false,left:false,right:false};
 
 /* 'orbit' (default third-person follow-cam) or 'first' — see toggleCameraMode() */
 let cameraMode='orbit';
@@ -264,6 +261,7 @@ function makeCar(){
     const hl=new THREE.Mesh(new THREE.SphereGeometry(.17,12,10),new THREE.MeshBasicMaterial({color:0xFFF6D0}));
     hl.scale.set(.4,.7,1); hl.position.set(len/2+.06,1.05+lo,z); g.add(hl);
   });
+  g.scale.setScalar(CAR_LENGTH/4.7);   // every dimension above was tuned against a 4.7-unit default tier
   return g;
 }
 
@@ -276,10 +274,10 @@ function physiqueLocal(){ const s=workoutStreak(); return s>=60?1:s>=30?.75:s>=1
    car-visibility fix and drive mode below land in isolated functions instead of
    growing an already-large monolith further. */
 function buildGround(){
-  const ground=M(new THREE.PlaneGeometry(160,160),nightMode?0x35392E:0xC9B896,{ink:false,lift:.06});
+  // bumped from 160x160 — the avenue now runs out to z=70 (see buildStreets())
+  // to give the car somewhere real to drive, so the ground needs to reach past it
+  const ground=M(new THREE.PlaneGeometry(240,240),nightMode?0x35392E:0xC9B896,{ink:false,lift:.06});
   ground.rotation.x=-Math.PI/2; scene.add(ground);
-  const drive=M(new THREE.PlaneGeometry(9,26),0x4E525A,{ink:false,lift:.05});
-  drive.rotation.x=-Math.PI/2; drive.position.set(9,.02,6); scene.add(drive);
   // the walkway is a raised concrete sidewalk with a kerb either side, not a
   // painted stripe on the dirt — same footprint as before so nothing that keys
   // off the player's spawn or the door spot shifts
@@ -289,6 +287,56 @@ function buildGround(){
     const kerb=M(new THREE.BoxGeometry(.3,.34,12),nightMode?0x6B6659:0xC0B9A8,{ink:false,lift:.04});
     kerb.position.set(x,.17,7); scene.add(kerb);
   });
+}
+
+/* ---- named streets ----
+   The old "drive" plane was just the driveway right outside the garage —
+   this replaces it with an actual through street plus one cross street,
+   loosely modeled on a real Santo Domingo intersection the owner shared
+   (two gray paved roads meeting near the colmado's corner, with a named
+   sign at each). This is a stylized approximation, not a traced map: real
+   street angles/curves are collapsed onto this game's existing north-south/
+   east-west grid rather than modeled as diagonals, since a rotated road
+   would need its own (rotated) collision box, UV-rotated texture handling,
+   and road-following logic none of the rest of the world has — not worth
+   it for two decorative cross streets. AVE_X=9 reuses the exact x the
+   driveway/garage/CAR_SPOT have always used, so parking and the garage
+   still sit right on the pavement. */
+const AVE_X=9, AVE_W=9, AVE_Z0=-20, AVE_Z1=70;
+const MARG_Z=23, MARG_W=9;
+function streetSign(text,x,z,rotY){
+  const c=document.createElement('canvas'); c.width=512; c.height=96;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#1B6B3A'; ctx.fillRect(0,0,512,96);
+  ctx.strokeStyle='#F2F0EA'; ctx.lineWidth=6; ctx.strokeRect(6,6,500,84);
+  ctx.fillStyle='#F2F0EA'; ctx.font='bold 50px sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text,256,50);
+  const tex=new THREE.CanvasTexture(c);
+  const g=new THREE.Group();
+  const post=M(new THREE.CylinderGeometry(.07,.09,3.2,8),0x3D3A32,{inkT:.06}); post.position.y=1.6; g.add(post);
+  // two single-sided plates back to back rather than one DoubleSide plate — a
+  // DoubleSide material mirrors the same texture onto its back face, which
+  // reads as reversed, unreadable text to traffic approaching from behind it
+  const mat=new THREE.MeshBasicMaterial({map:tex});
+  const plateA=new THREE.Mesh(new THREE.PlaneGeometry(3.4,.64),mat);
+  plateA.position.set(0,3.05,.01); g.add(plateA);
+  const plateB=new THREE.Mesh(new THREE.PlaneGeometry(3.4,.64),mat);
+  plateB.position.set(0,3.05,-.01); plateB.rotation.y=Math.PI; g.add(plateB);
+  g.position.set(x,0,z); g.rotation.y=rotY;
+  scene.add(g);
+}
+function buildStreets(){
+  // AV. INDEPENDENCIA — the main through avenue. y slightly lower than the
+  // cross street's plane so the two don't z-fight where they overlap.
+  const ave=M(new THREE.PlaneGeometry(AVE_W,AVE_Z1-AVE_Z0),0x4E525A,{ink:false,lift:.05});
+  ave.rotation.x=-Math.PI/2; ave.position.set(AVE_X,.02,(AVE_Z0+AVE_Z1)/2); scene.add(ave);
+  streetSign('AV. INDEPENDENCIA',AVE_X+6.6,-9,Math.PI/2);
+
+  // C. MARGINAL — crosses it between the house and the colmado
+  const marg=M(new THREE.PlaneGeometry(130,MARG_W),0x53565C,{ink:false,lift:.05});
+  marg.rotation.x=-Math.PI/2; marg.position.set(0,.035,MARG_Z); scene.add(marg);
+  streetSign('C. MARGINAL',AVE_X-9,MARG_Z-6,0);
 }
 
 /* ---- shared Dominican building parts ----
@@ -653,17 +701,18 @@ function buildPalms(colPos){
 }
 
 /* ---- power poles and the overhead wire tangle ----
-   As much a part of a DR street as the buildings are. Placed at x=-15, outside
-   the perimeter fence line (x=-13.5) that the security upgrades build, so the two
-   never collide however many fence tiers the player has bought. */
+   As much a part of a DR street as the buildings are. Placed at x=-30 — clear
+   of both the perimeter fence line (x=-13.5, from the security upgrades) and
+   the colmado's footprint (COLMADO_POS.x=-16, collider out to x=-21) now that
+   it sits further west of the avenue. */
 function buildPowerLines(){
   const tops=[];
   [-4,9,22,35].forEach(z=>{
     const pole=M(new THREE.CylinderGeometry(.18,.24,8,8),nightMode?0x5D5850:0x8A8378,{inkT:.03});
-    pole.position.set(-15,4,z); scene.add(pole);
+    pole.position.set(-30,4,z); scene.add(pole);
     const arm=M(new THREE.BoxGeometry(2.2,.16,.16),nightMode?0x4A463E:0x6E675C,{ink:false});
-    arm.position.set(-15,7.4,z); scene.add(arm);
-    tops.push(new THREE.Vector3(-15,7.4,z));
+    arm.position.set(-30,7.4,z); scene.add(arm);
+    tops.push(new THREE.Vector3(-30,7.4,z));
   });
   const wireM=new THREE.LineBasicMaterial({color:nightMode?0x0A0C10:0x1A1A1A});
   for(let i=0;i<tops.length-1;i++) for(let k=0;k<4;k++){
@@ -746,12 +795,24 @@ function buildCar(){
   world.car=modelCar(S.vehicle.paint)||makeCar();
   world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
   scene.add(world.car);
+  // carPhys.rot uses the SAME convention as world.car.rotation.y-CAR_ROT_OFFSET
+  // (see carphysics.js's header) — no conversion needed at the boundary
+  carPhys=new CarPhysics({length:CAR_LENGTH,width:CAR_WIDTH});
+  carPhys.pos=[CAR_SPOT.x,CAR_SPOT.z]; carPhys.rot=0;
 }
 
 /* the colmado's world position — a module constant (not a buildWorld() local)
    so the collision boxes below can reference the exact same numbers buildColmado()
-   and its neighbours (domino table, street lights, wanderers, palms) build from. */
-const COLMADO_POS=new THREE.Vector3(-2,0,24);
+   and its neighbours (domino table, street lights, wanderers, palms) build from.
+   Shifted west and further out (see buildStreets()) so the colmado sits in its
+   own corner block, off to the side of the avenue rather than dead ahead of the
+   player's spawn, with enough gap for C. Marginal to cross the avenue between
+   the house and the colmado without slicing through the security-fence
+   perimeter or the colmado's own footprint. Moving z further AWAY from spawn
+   (24->34) only widens the margin CLAUDE.md's camera-safety note is protecting
+   (the default camera converges around z=15.5, well short of either value) —
+   still re-verified after this change, same as any colmado-position edit should be. */
+const COLMADO_POS=new THREE.Vector3(-16,0,34);
 
 /* ---- building collision ----
    Solid walls that neither the player nor the driven car can pass through.
@@ -856,6 +917,7 @@ function buildWorld(){
   camera=new THREE.PerspectiveCamera(54,1,.1,400);
 
   buildGround();
+  buildStreets();
   buildHouse();
   buildGarage();
   const colPos=COLMADO_POS;
@@ -884,7 +946,7 @@ function spots(){
     {key:'car',nm:'YOUR VEHICLE',hint:'Drive or view garage',p:CAR_SPOT,r:5,act:()=>openCarMenu()},
     {key:'door',nm:'FRONT DOOR',hint:'Home security',p:new THREE.Vector3(-2,0,5.6),r:3.6,act:()=>openSecurity()},
     {key:'board',nm:'THE BOARD',hint:'Log your day',p:new THREE.Vector3(-7.5,0,7.5),r:3.6,act:()=>openLog()},
-    {key:'colmado',nm:'EL COLMADO',hint:'Say what\'s up',p:new THREE.Vector3(-2,0,24),r:6,act:()=>colmadoGreet()}
+    {key:'colmado',nm:'EL COLMADO',hint:'Say what\'s up',p:COLMADO_POS,r:6,act:()=>colmadoGreet()}
   ];
 }
 const COLMADO_LINES=[
@@ -1104,43 +1166,64 @@ function smoothYaw(current, target, rate, dt){
   while(dy>Math.PI) dy-=Math.PI*2; while(dy<-Math.PI) dy+=Math.PI*2;
   return current+dy*Math.min(1,dt*rate);
 }
-function stepToward(v,target,rate,dt){
-  const d=target-v, m=rate*dt;
-  return Math.abs(d)<=m ? target : v+Math.sign(d)*m;
-}
-
-/* Drives world.car one physics step toward driveTarget. Moves it forward (or
-   backward) along its OWN heading rather than straight at the target — see
-   the constants block above for why. */
+/* Drives world.car one physics step via carPhys (js/carphysics.js). Keyboard
+   (WASD/arrows) commands throttle and steering-wheel rate directly, exactly
+   like a real car's pedal and wheel; tap-to-drive falls back to a small
+   steering controller that aims for the same two inputs instead of moving
+   the car itself, so both control schemes run through the identical physics. */
 function driveCar(dt){
-  if(!driveTarget){
-    carSpeed=stepToward(carSpeed,0,CAR_BRAKE,dt);
-  } else {
-    const dx=driveTarget.x-world.car.position.x, dz=driveTarget.z-world.car.position.z;
+  const c=carPhys.properties;
+  let throttle=0, wheelTurnSpeed=0;
+  const anyKey=driveKeys.fwd||driveKeys.back||driveKeys.left||driveKeys.right;
+  if(anyKey){
+    throttle=(driveKeys.fwd?1:0)-(driveKeys.back?1:0);
+    if(throttle<0) throttle*=0.5;   // reverse gear is slower than the engine's forward output
+    wheelTurnSpeed=((driveKeys.right?1:0)-(driveKeys.left?1:0))*c.wheelTurnSpeed;
+    driveTarget=null; marker.visible=false;
+  } else if(driveTarget){
+    const dx=driveTarget.x-carPhys.pos[0], dz=driveTarget.z-carPhys.pos[1];
     const dist=Math.hypot(dx,dz);
     if(dist<=CAR_ARRIVE_DIST){
-      driveTarget=null; marker.visible=false; carSpeed=stepToward(carSpeed,0,CAR_BRAKE,dt);
+      driveTarget=null; marker.visible=false;
     } else {
       const toTarget=Math.atan2(dx,dz);
-      let err=toTarget-carYaw; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
-      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*2;
-      carTargetYaw=reversing ? toTarget+Math.PI : toTarget;
-      const stopDist=(carSpeed*carSpeed)/(2*CAR_BRAKE)+0.6;
-      const desired=dist<=stopDist ? 0 : (reversing?-CAR_REVERSE_SPEED:CAR_MAX_SPEED);
-      carSpeed=stepToward(carSpeed,desired,desired===0?CAR_BRAKE:CAR_ACCEL,dt);
+      let err=toTarget-carPhys.rot; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
+      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*3;
+      const steerErr=reversing ? (()=>{ let r=(toTarget+Math.PI)-carPhys.rot; while(r>Math.PI) r-=Math.PI*2; while(r<-Math.PI) r+=Math.PI*2; return r; })() : err;
+      const desiredWheel=clampAbs(steerErr*1.6,c.maxWheelAngle);
+      wheelTurnSpeed=clampAbs((desiredWheel-carPhys.wheelAngle)*10,c.wheelTurnSpeed);
+      if(reversing) throttle=-0.45;
+      else{
+        const speed=carPhys.getSpeed();
+        throttle = (dist<8&&speed>3) ? -1 : Math.min(1,dist/8);
+      }
     }
+  } else {
+    // idle: no input held, let the wheel self-center like a real steering rack
+    wheelTurnSpeed=clampAbs(-carPhys.wheelAngle*8,c.wheelTurnSpeed);
   }
-  // steering authority shrinks with speed — quick to pivot near-stopped, wide
-  // arcs at speed, same as a real car's minimum turning radius
-  const speedFrac=Math.min(1,Math.abs(carSpeed)/CAR_MAX_SPEED);
-  const turnRate=CAR_TURN_RATE_LOW-(CAR_TURN_RATE_LOW-CAR_TURN_RATE_HIGH)*speedFrac;
-  carYaw=smoothYaw(carYaw,carTargetYaw,turnRate,dt);
-  world.car.position.x+=Math.sin(carYaw)*carSpeed*dt;
-  world.car.position.z+=Math.cos(carYaw)*carSpeed*dt;
-  if(resolveCollisions(world.car.position,CAR_RADIUS)){
-    carSpeed=0; driveTarget=null; marker.visible=false;
+
+  carPhys.move(dt,{throttle,wheelTurnSpeed});
+
+  const p=tmpVec3.set(carPhys.pos[0],0,carPhys.pos[1]);
+  if(resolveCollisions(p,CAR_RADIUS)){
+    carPhys.v=[0,0]; carPhys.vrot=0; driveTarget=null; marker.visible=false;
   }
-  world.car.rotation.y=carYaw+CAR_ROT_OFFSET;
+  carPhys.pos=[p.x,p.z];
+  world.car.position.set(p.x,0,p.z);
+  world.car.rotation.y=carPhys.rot+CAR_ROT_OFFSET;
+}
+const tmpVec3=new THREE.Vector3();
+/* Maps WASD and the arrow keys onto driveKeys — read every frame by driveCar()
+   above, only ever acted on while controlMode==='drive'. Harmless to update
+   while walking; tick() simply never looks at driveKeys outside drive mode. */
+function setDriveKey(key,down){
+  switch(key.toLowerCase()){
+    case 'w': case 'arrowup': driveKeys.fwd=down; break;
+    case 's': case 'arrowdown': driveKeys.back=down; break;
+    case 'a': case 'arrowleft': driveKeys.left=down; break;
+    case 'd': case 'arrowright': driveKeys.right=down; break;
+  }
 }
 
 function tick(){
@@ -1244,7 +1327,8 @@ function bindControls(){
   };
   cv.addEventListener('pointerup',up);
   cv.addEventListener('pointercancel',()=>{drag.down=false;});
-  window.addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='e') useTarget(); });
+  window.addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='e') useTarget(); setDriveKey(e.key,true); });
+  window.addEventListener('keyup',e=>{ setDriveKey(e.key,false); });
   window.addEventListener('resize',()=>{ if(running) resize(); });
   window.addEventListener('orientationchange',()=>{
     // iOS/Android report the new size a beat late — a bare resize() here often
@@ -1323,21 +1407,27 @@ function enterDriveMode(){
   controlMode='drive';
   updatePlayerVisibility();
   moveTarget=null; driveTarget=null; marker.visible=false;
-  // seed carYaw from the car's current (parked or previously-driven) rotation,
-  // inverting the fixed model offset so the very first driven frame doesn't snap
-  carYaw=carTargetYaw=world.car.rotation.y-CAR_ROT_OFFSET; carSpeed=0;
+  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
+  // re-seed carPhys from the car's current (parked or previously-driven) position
+  // and rotation, inverting the fixed model offset so the very first driven
+  // frame doesn't snap; wheelAngle/velocity reset so a stale drive doesn't
+  // carry momentum into a fresh one
+  carPhys.pos=[world.car.position.x,world.car.position.z];
+  carPhys.rot=world.car.rotation.y-CAR_ROT_OFFSET;
+  carPhys.v=[0,0]; carPhys.vrot=0; carPhys.wheelAngle=0;
   document.getElementById('prompt').style.display='none';
   document.getElementById('exitVehicleBtn').style.display='block';
-  const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO DRIVE · DRAG TO LOOK';
+  const hint=document.getElementById('hint'); if(hint) hint.textContent='WASD/ARROWS OR TAP GROUND TO DRIVE · DRAG TO LOOK';
 }
 function exitDriveMode(){
   if(controlMode!=='drive') return;
   controlMode='walk';
   // step out beside the car rather than reappearing on top of it
   player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
-  player.yaw=player.targetYaw=carYaw;
+  player.yaw=player.targetYaw=carPhys.rot;
   updatePlayerVisibility();
   driveTarget=null; marker.visible=false;
+  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
   document.getElementById('exitVehicleBtn').style.display='none';
   const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO WALK · TAP THINGS TO USE · DRAG TO LOOK';
 }
@@ -1362,7 +1452,8 @@ function backToTitle(){
   running=false; if(raf) cancelAnimationFrame(raf);
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
-  controlMode='walk'; driveTarget=null; carSpeed=0;
+  controlMode='walk'; driveTarget=null; carPhys=null;
+  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
   clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   if(scene){
