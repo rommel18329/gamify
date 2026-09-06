@@ -69,13 +69,15 @@
      else can throw; vendor/three.min.js must exist before data/game/ui touch THREE;
      data.js defines state + economy that game.js and ui.js both read from;
      carphysics.js is a standalone, THREE-free car physics engine that game.js
-     builds a CarPhysics instance from in buildCar(). -->
+     builds a CarPhysics instance from in buildCar() — the fallback if
+     vendor/cannon.js (a real rigid-body physics engine) fails to load. -->
 <script src="js/errors.js"></script>
 <script src="js/vendor/three.min.js"></script>
 <script src="js/vendor/GLTFLoader.js"></script>
 <script src="js/vendor/SkeletonUtils.js"></script>
 <script src="js/vendor/MTLLoader.js"></script>
 <script src="js/vendor/OBJLoader.js"></script>
+<script src="js/vendor/cannon.js"></script>
 <script src="js/data.js"></script>
 <script src="js/carphysics.js"></script>
 <script src="js/models.js"></script>

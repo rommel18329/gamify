@@ -42,9 +42,11 @@ index.html          shell: markup + <script> tags in load order, nothing else
 css/styles.css       all styling
 js/errors.js         window.onerror -> visible on-screen error box (loads first)
 js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
+js/vendor/cannon.js  cannon.js (the original, not cannon-es), vendored
+                     verbatim, MIT licensed — drives the car, see "Car physics"
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
-js/carphysics.js     standalone car physics engine (no THREE, no DOM) — see
-                     "Car physics" below
+js/carphysics.js     from-scratch car physics engine (no THREE, no DOM) — the
+                     fallback if vendor/cannon.js fails to load, see "Car physics"
 js/models.js         loads the CC0 rigged characters + car, recolours them into
                      outfits, drives their animation mixers
 assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl)
@@ -301,52 +303,87 @@ directly toward the tapped point regardless of which way it's facing reads
 as crabbing sideways into its own turns, since a vehicle can only actually
 move along its own heading.
 
-`js/carphysics.js` is a real, dependency-free port of the 2D rigid-body car
-model from `oseiskar/js-car` on GitHub (MIT) — not a hand-tuned accelerate/
-steer approximation. Each frame it solves the exact front/rear contact
-forces needed to keep both axle centers from sliding sideways (a coupled
-2x2 system, solved with Cramer's rule — the source uses mathjs for this,
-which isn't needed since the mass/inertia matrix is diagonal and trivial to
-invert by hand; that's the only thing "ported" rather than vendored
-verbatim, every equation is the source's own), then checks whether either
-axle's required force exceeds its friction limit. If it does, that axle
-slips and its force is capped at the lower dynamic-friction limit instead —
-this is what produces real loss-of-grip on a too-sharp turn at speed, an
-emergent result of the solve, not a scripted "turn slower when fast" rule.
+**`js/vendor/cannon.js` drives the car** — a real rigid-body chassis on 4
+raycast wheels with actual suspension (`CANNON.RaycastVehicle`), not a
+hand-rolled model. This is the original `cannon.js` (schteppe), not the
+actively-maintained `cannon-es` fork — deliberately: `cannon-es` only ships
+ESM/CJS builds now, no UMD/global, and this app is classic `<script>` tags
+with no build step on purpose (see File layout above); loading an ES module
+here would mean either a bundler or breaking the load-order model every
+other script relies on. The original still ships a proper UMD build
+(`f.CANNON=e()` in a plain global branch) with the *identical*
+`RaycastVehicle` API — `cannon-es` forked it to modernize the codebase, not
+the physics — so it fits this architecture with zero compromise on the
+actual driving feel. MIT licensed either way.
 
-**Tuning gotcha, already hit once:** the source's `maxThrust` formula
-(`mass*thrustFrac*gravity*0.5`) and its slip check aren't independent —
-thrust is bundled into the back axle's force for the purpose of that check,
-so a `thrustFrac` at or above `staticFriction` means the rear "tires" are
-permanently past their grip limit under any throttle at all, i.e. permanent
-wheelspin, and every frame gets force-capped at the much lower
-`dynamicFriction`-based limit regardless of the requested thrust — measured
-result: the car topped out around 2 units/s instead of the ~14 the
-`dragFrac`/`thrustFrac` pair was meant to produce. Keep `thrustFrac`
-comfortably under `staticFriction` so straight-line acceleration stays in
-the no-slip regime; top speed is then `thrustFrac*gravity*0.5/dragFrac`,
-independent of `mass` (it cancels — `mass` only affects rotational
-response, via `MoI`). If you retune these, verify numerically first —
-`node -e "eval(require('fs').readFileSync('js/carphysics.js','utf8')); const c=new CarPhysics({length:9.6,width:4}); for(let i=0;i<360;i++) c.move(1/60,{throttle:1,wheelTurnSpeed:0}); console.log(c.getSpeed())"`
-— rather than only judging it by feel in the browser.
+`buildPhysicsWorld()` builds one static box body per `buildingColliders()`
+entry (see Collision below) plus a ground plane; `buildVehicle()` builds the
+chassis and 4 wheels, sized off `CAR_LENGTH`/`CAR_WIDTH` so they can never
+drift from the visual mesh. `driveCarCannon()` in `js/game.js` feeds it
+`engineForce`/`steer`/`brake` from whichever control is active — WASD/arrow
+keys (`driveKeys`) map directly onto them like a real pedal and wheel;
+tap-to-drive (`driveTarget`) runs a small steering controller that aims for
+the same two inputs — then steps the world and copies the settled chassis
+transform onto `world.car`. `js/carphysics.js` (below) is the fallback if
+`window.CANNON` is ever undefined (`USE_CANNON`, decided once at load) —
+same "a missing asset costs you the good version, never a broken game"
+pattern `models.js` uses for characters — so anything that touches driving
+needs a code path for both.
 
-`driveCar(dt)` in `js/game.js` feeds `carPhys.move()` its two inputs —
-`throttle` and `wheelTurnSpeed` — from whichever control is active:
-WASD/arrow keys (`driveKeys`, set by `setDriveKey()`) map directly onto
-them like a real pedal and steering wheel; tap-to-drive (`driveTarget`,
-still the touch fallback) instead runs a small steering controller each
-frame that computes the wheel angle and throttle needed to head toward the
-tapped point, so both control schemes drive the exact same physics rather
-than one being a simplified stand-in for the other. Any drive key going
-down clears a pending `driveTarget` so the two never fight over the wheel.
-`carPhys.pos`/`.rot` ARE `world.car`'s position and yaw (`CAR_ROT_OFFSET`
-still applies on top, same as before) — `enterDriveMode()` re-seeds them
-from the car's current transform and zeroes velocity/wheel angle so a
-stale drive never carries momentum into a fresh one.
+**Four real bugs, all found by simulating in isolated Node before ever
+touching the browser** (`node -e "eval(require('fs').readFileSync('js/vendor/cannon.js','utf8'))..."`,
+building a `CANNON.World()` + `RaycastVehicle` exactly like `buildVehicle()`
+does and logging `chassisBody.position`/`.velocity` over simulated time —
+do this again before retuning any of the constants below):
 
-`CAR_LENGTH` (`js/game.js`) is the one source of truth for the car's size —
-both `modelCar()` (`js/models.js`) and the primitive fallback `makeCar()`
-scale to it, and `CAR_RADIUS` (used by collision, below) is derived from it
+- **This cannon.js version defaults its vehicle-frame axis indices wrong for
+  a Y-up world.** `indexRightAxis`/`indexForwardAxis`/`indexUpAxis` default
+  to `(1,0,2)` — a different convention than this game's Y-up, Z-forward
+  world. `buildVehicle()` passes `{indexRightAxis:0,indexUpAxis:1,indexForwardAxis:2}`
+  explicitly; without it, engine force still shows up on the wheel and
+  `isInContact` still reads true, but the propulsive impulse comes out
+  along world X instead of the chassis's actual forward direction — the car
+  just slides sideways under full throttle. This one is easy to
+  mis-diagnose: removing it once looked like it fixed a bug (the car
+  launching sideways on spawn) because it happened to coincide with fixing
+  the CAR_SPOT/garage overlap below — always change one thing at a time
+  when two suspects are in play.
+- **`CAR_SPOT` needs real clearance from the garage now.** The old collision
+  system only ever checked a small `CAR_RADIUS` circle around the car's
+  *center point* — it never modeled the car's actual 9.6-unit length, so a
+  spot whose circle cleared the garage was "safe" even with the car's rear
+  end well past that circle. cannon.js's chassis is a real box that length;
+  at the old `z=4` its rear end penetrated the garage's static collider,
+  and the contact solver correcting that spawn-time interpenetration in
+  `buildVehicle()`'s settle loop looked exactly like the car launching
+  sideways over a dozen units. `CAR_SPOT` is `(9,0,7)` now — rear bumper at
+  `7-4.8=2.2`, clear of the garage's `maxZ=0.5` with margin. If you move any
+  parked vehicle spawn, check its full length against `buildingColliders()`,
+  not just its center point.
+- **`CANNON.Body` defaults `allowSleep` to `true`.** A parked car sitting
+  still for even a few seconds goes to sleep, and `applyEngineForce()` on a
+  sleeping body is a silent no-op — found by simulating: engine force and
+  wheel contact both read correctly every frame, the car just sat dead
+  under full throttle after idling. `buildVehicle()` sets
+  `chassisBody.allowSleep=false` — a drivable vehicle should always respond
+  the instant the player touches the controls, however long it's been
+  parked.
+- **Don't use `world.step()`'s 3-argument "recommended" accumulator form
+  here.** With `dt` already clamped near 1/60 in `tick()`, the fixed step
+  and elapsed time land on nearly the same value every frame, and
+  `World.prototype.step()`'s internal-steps calculation
+  (`Math.floor((time+dt)/fixedStep) - Math.floor(time/fixedStep)`) is a
+  floating-point hair away from computing 0 steps far more often than it
+  should. Same symptom as the sleep bug — force and contact both read right,
+  nothing moves — for a completely different reason. `driveCarCannon()`
+  calls the plain single-argument `physWorld.step(dt)` instead (one real
+  step of that size, no accumulator), matching what the isolated tuning
+  script used throughout.
+
+`CAR_LENGTH` (`js/game.js`) is still the one source of truth for the car's
+size — `modelCar()` (`js/models.js`), the primitive fallback `makeCar()`,
+*and* the cannon.js chassis in `buildVehicle()` all scale to it, and
+`CAR_RADIUS` (fallback-mode collision only, see below) is derived from it
 too. It was previously hardcoded to `4.7`, barely 1.2x the fixed 4-unit
 player height — a car you could nearly look level with. It's `9.6` now
 (2.4x), landing in a believable real-car-vs-a-person range; if you ever
@@ -355,22 +392,32 @@ number that merely "looks OK" from one angle.
 
 ## Collision
 
-`resolveCollisions(pos, radius)` in `js/game.js` pushes a position out of
-whichever building it's penetrated, along whichever axis needs the smaller
-correction, and reports whether it did. `buildingColliders()` lists one
-axis-aligned box per building (house, garage, colmado — the colmado's box
-is padded further on its street-facing side than its actual wall, to also
-block the counter/crates/gas-cylinder clutter sitting in front of it) built
-from the same numbers `buildHouse()`/`buildGarage()`/`buildColmado()` use,
-plus `COLMADO_POS`, so the two can't drift apart independently. `tick()`/
-`driveCar()` call it for both the walking player (`PLAYER_RADIUS`) and the
-driven car (`CAR_RADIUS`) every frame; a hit cancels the pending
-`moveTarget`/`driveTarget` (and, for the car, zeroes `carPhys.v`/`.vrot`)
-rather than leaving the seek/steering logic pushing into the wall every
-frame, which would otherwise jitter the position back and forth against
-it. Porch columns, awnings and the domino table are deliberately NOT
-collidable — thin single posts, not walls, and colliding with every one of
-them would make walking near the house feel like fighting the geometry.
+`buildingColliders()` in `js/game.js` lists one axis-aligned box per
+building (house, garage, colmado — the colmado's box is padded further on
+its street-facing side than its actual wall, to also block the counter/
+crates/gas-cylinder clutter sitting in front of it) built from the same
+numbers `buildHouse()`/`buildGarage()`/`buildColmado()` use, plus
+`COLMADO_POS`, so the two can't drift apart independently. It's the single
+source of truth for both collision systems in the game:
+
+- `buildPhysicsWorld()` turns each entry into a real static `CANNON.Box`
+  body (extruded well above head height) for the driven car, under
+  cannon.js, to collide with as an actual rigid-body contact.
+- `resolveCollisions(pos, radius)` pushes a position out of whichever box
+  it's penetrated, along whichever axis needs the smaller correction, and
+  reports whether it did — a 2D-only shortcut good enough for the walking
+  player (`PLAYER_RADIUS`, called every frame from `tick()`) and for the
+  car whenever `USE_CANNON` is false (`CAR_RADIUS`, called from
+  `driveCarFallback()`); a hit cancels the pending `moveTarget`/
+  `driveTarget` (and, for the fallback car, zeroes `carPhys.v`/`.vrot`)
+  rather than leaving the seek/steering logic pushing into the wall every
+  frame, which would otherwise jitter the position back and forth against
+  it.
+
+Porch columns, awnings and the domino table are deliberately NOT collidable
+in either system — thin single posts, not walls, and colliding with every
+one of them would make walking near the house feel like fighting the
+geometry.
 
 ## Streets
 

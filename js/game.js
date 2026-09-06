@@ -9,15 +9,21 @@ let drag={down:false,moved:false,x:0,y:0,t:0,id:null};
 /* 'walk' (default) or 'drive' — see enterDriveMode()/exitDriveMode() */
 let controlMode='walk';
 let driveTarget=null;
-/* Real car physics via CarPhysics (js/carphysics.js) — a dependency-free port
-   of oseiskar/js-car's front/rear-axle constraint solver, not a hand-tuned
-   accelerate/steer approximation. carPhys.pos/.rot ARE world.car's position
-   and yaw; see driveCar() below for how it's driven (WASD/arrows directly,
-   or a small steering controller when following a tap-to-drive target). */
-let carPhys=null;
+/* Driving physics: js/vendor/cannon.js (MIT) when it loads — a real rigid-body
+   chassis on 4 raycast wheels with actual suspension, driven by
+   driveCarCannon() below — falling back to CarPhysics (js/carphysics.js, a
+   dependency-free port of oseiskar/js-car's front/rear-axle constraint solver,
+   driven by driveCarFallback()) if it doesn't. Same "a missing asset costs you
+   the good version, never a broken game" pattern models.js uses for
+   characters. USE_CANNON is decided once, from whether the vendored script
+   defined the CANNON global by the time this file runs. */
+const USE_CANNON=typeof CANNON!=='undefined';
+let carPhys=null;                        // fallback physics (see driveCarFallback())
+let physWorld=null,vehicle=null,chassisBody=null,carRideHeight=0;   // cannon.js state
 const CAR_LENGTH=9.6, CAR_WIDTH=CAR_LENGTH*0.42;
 const CAR_ARRIVE_DIST=1.2, CAR_REVERSE_ANGLE=2.2;   // radians (~126°) — "target is behind" cutoff
-const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;
+const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-mode collision only
+const CAR_MAX_ENGINE_FORCE=2600, CAR_REVERSE_ENGINE_FORCE=1300, CAR_MAX_STEER=0.5, CAR_BRAKE_FORCE=60;
 /* WASD/arrow keys drive the car directly — tap-to-drive (touch) still works
    as a fallback and the two never fight: any drive key going down cancels
    the pending tap target, and tapping the ground while no key is held goes
@@ -790,13 +796,23 @@ function buildSecurityProps(){
 /* car — parked on the driveway, just outside the garage door, so it's actually
    visible (see buildGarage() above) and has room to drive off from. CAR_SPOT
    is also used by spots() and rebuildCar() so all three stay in sync. */
-const CAR_SPOT=new THREE.Vector3(9,0,4), CAR_ROT_OFFSET=Math.PI/2;
+/* z=7, not 4: the old AABB collision only ever checked a small CAR_RADIUS
+   circle around the car's center point, so a spot whose circle cleared the
+   garage was "safe" even though the car's true 9.6-unit length reached
+   well past that circle. cannon.js's chassis is a real box the car's full
+   length, and at z=4 its rear end penetrated the garage's static collider —
+   the settle step in buildVehicle() then read as the car launching sideways
+   over a dozen units, which is really a contact solver violently correcting
+   a spawn-time interpenetration. z=7 clears the garage's z<=0.5 edge with
+   real margin (rear bumper at 7-4.8=2.2). Found by tracing exactly that. */
+const CAR_SPOT=new THREE.Vector3(9,0,7), CAR_ROT_OFFSET=Math.PI/2;
 function buildCar(){
   world.car=modelCar(S.vehicle.paint)||makeCar();
   world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
   scene.add(world.car);
-  // carPhys.rot uses the SAME convention as world.car.rotation.y-CAR_ROT_OFFSET
-  // (see carphysics.js's header) — no conversion needed at the boundary
+  // the fallback physics is always built, cheap and ready, even when cannon.js
+  // is driving — carPhys.rot uses the SAME convention as
+  // world.car.rotation.y-CAR_ROT_OFFSET (see carphysics.js's header)
   carPhys=new CarPhysics({length:CAR_LENGTH,width:CAR_WIDTH});
   carPhys.pos=[CAR_SPOT.x,CAR_SPOT.z]; carPhys.rot=0;
 }
@@ -847,6 +863,86 @@ function resolveCollisions(pos,radius){
     else pos.z=pos.z>cz?maxZ:minZ;
   });
   return hit;
+}
+
+/* ---- cannon.js physics world (only when USE_CANNON) ----
+   One static box body per buildingColliders() entry — extruded well above
+   head height, since cannon.js doesn't need the 2D-only shortcut
+   resolveCollisions() uses — plus a ground plane, so the driven car collides
+   with real walls through an actual rigid-body contact solve. Rebuilt fresh
+   every buildWorld() call: cannon.js bodies are plain JS objects with no GPU
+   resources, so unlike the THREE scene there's nothing to dispose. */
+function buildPhysicsWorld(){
+  if(!USE_CANNON) return;
+  physWorld=new CANNON.World();
+  physWorld.gravity.set(0,-9.82,0);
+  physWorld.broadphase=new CANNON.SAPBroadphase(physWorld);
+  physWorld.defaultContactMaterial.friction=0.3;
+
+  const ground=new CANNON.Body({mass:0});
+  ground.addShape(new CANNON.Plane());
+  ground.quaternion.setFromEuler(-Math.PI/2,0,0);
+  physWorld.addBody(ground);
+
+  buildingColliders().forEach(b=>{
+    const hx=(b.maxX-b.minX)/2, hz=(b.maxZ-b.minZ)/2, hy=6;
+    const body=new CANNON.Body({mass:0});
+    body.addShape(new CANNON.Box(new CANNON.Vec3(hx,hy,hz)));
+    body.position.set((b.minX+b.maxX)/2,hy,(b.minZ+b.maxZ)/2);
+    physWorld.addBody(body);
+  });
+}
+
+/* ---- the driven car's rigid body (only when USE_CANNON) ----
+   Chassis sized off CAR_LENGTH/CAR_WIDTH so it can never drift from the
+   visual mesh. Suspension/friction/steering numbers here were tuned and
+   verified numerically in isolated Node — settles flat with no roll, holds a
+   hard turn at speed without flipping, stops cleanly against a wall rather
+   than jittering — before this ever ran in a browser; see CLAUDE.md for the
+   exact repro commands if you retune them. */
+function buildVehicle(){
+  if(!USE_CANNON) return;
+  const chassisShape=new CANNON.Box(new CANNON.Vec3(CAR_WIDTH/2,1.0,CAR_LENGTH/2));
+  chassisBody=new CANNON.Body({mass:1400});
+  // CANNON.Body defaults allowSleep to true — a parked car sitting still for
+  // even a few seconds goes to sleep, and applyEngineForce() on a sleeping
+  // body is a silent no-op (found by simulating: the car sat still under full
+  // throttle after idling). A drivable vehicle should always respond the
+  // instant the player touches the controls, however long it's been parked.
+  chassisBody.allowSleep=false;
+  chassisBody.addShape(chassisShape);
+  chassisBody.position.set(CAR_SPOT.x,2.5,CAR_SPOT.z);
+  physWorld.addBody(chassisBody);
+
+  // This version of cannon.js defaults indexRightAxis/indexForwardAxis/
+  // indexUpAxis to (y,x,z) — a different convention than our Y-up world —
+  // so they're overridden here to match (x,z,y). This IS required: the
+  // wheel's forward-rolling direction is ground-normal × axle in world
+  // space, and with the wrong up-axis bookkeeping elsewhere in the solve it
+  // comes out along the wrong world axis entirely (verified two ways: the
+  // isolated Node tuning script this was built against, and — the hard way —
+  // by wrongly removing this once, which looked like it fixed a sideways
+  // launch that was actually a separate CAR_SPOT/garage overlap bug).
+  vehicle=new CANNON.RaycastVehicle({chassisBody,indexRightAxis:0,indexUpAxis:1,indexForwardAxis:2});
+  const wheelOptions={
+    radius:0.9, directionLocal:new CANNON.Vec3(0,-1,0), suspensionStiffness:45,
+    suspensionRestLength:0.7, frictionSlip:2.2, dampingRelaxation:2.8,
+    dampingCompression:4.6, maxSuspensionForce:200000, rollInfluence:0.02,
+    axleLocal:new CANNON.Vec3(1,0,0), maxSuspensionTravel:0.6,
+    customSlidingRotationalSpeed:-40, useCustomSlidingRotationalSpeed:true
+  };
+  const hw=CAR_WIDTH/2-0.2, hl=CAR_LENGTH/2-1.4;   // wheel indices: 0=FL 1=FR 2=RL 3=RR
+  [[-hw,0,hl],[hw,0,hl],[-hw,0,-hl],[hw,0,-hl]].forEach(([x,y,z])=>{
+    vehicle.addWheel(Object.assign({},wheelOptions,{chassisConnectionPointLocal:new CANNON.Vec3(x,y,z)}));
+  });
+  vehicle.addToWorld(physWorld);
+
+  // let the suspension settle onto the ground before the player ever sees or
+  // drives it, then read back the resting ride height: the visual mesh's own
+  // origin sits at ground level (at its wheels), not at the chassis body's
+  // center, so every frame after this offsets by exactly this much
+  for(let i=0;i<30;i++) physWorld.step(1/60);
+  carRideHeight=chassisBody.position.y;
 }
 
 /* the board */
@@ -929,7 +1025,9 @@ function buildWorld(){
   buildPowerLines();
   buildLighting();
   buildSecurityProps();
+  buildPhysicsWorld();
   buildCar();
+  buildVehicle();
   buildBoard();
   buildFoliage();
   buildPlayer();
@@ -1166,12 +1264,81 @@ function smoothYaw(current, target, rate, dt){
   while(dy>Math.PI) dy-=Math.PI*2; while(dy<-Math.PI) dy+=Math.PI*2;
   return current+dy*Math.min(1,dt*rate);
 }
-/* Drives world.car one physics step via carPhys (js/carphysics.js). Keyboard
-   (WASD/arrows) commands throttle and steering-wheel rate directly, exactly
-   like a real car's pedal and wheel; tap-to-drive falls back to a small
-   steering controller that aims for the same two inputs instead of moving
-   the car itself, so both control schemes run through the identical physics. */
+/* Drives world.car one physics step. Uses the real cannon.js RaycastVehicle
+   when it loaded (driveCarCannon()); otherwise falls back to the from-scratch
+   CarPhysics port (driveCarFallback()). Both take the same two kinds of
+   input — WASD/arrows directly, or a small steering controller aiming a
+   tap-to-drive target — so the control feel matches either way; only the
+   physics underneath differs. */
 function driveCar(dt){
+  if(USE_CANNON) driveCarCannon(dt); else driveCarFallback(dt);
+}
+
+/* Steers/throttles the cannon.js vehicle built in buildVehicle(). Heading is
+   read fresh from the chassis quaternion each frame rather than tracked
+   separately — the chassis stays flat (no roll/pitch) by construction, so a
+   plain yaw angle via atan2 is exact, not an approximation. */
+function driveCarCannon(dt){
+  const q=chassisBody.quaternion;
+  const fwdX=2*(q.x*q.z+q.y*q.w), fwdZ=1-2*(q.x*q.x+q.y*q.y);
+  const yaw=Math.atan2(fwdX,fwdZ);
+  const anyKey=driveKeys.fwd||driveKeys.back||driveKeys.left||driveKeys.right;
+  let engineForce=0, steer=0, brake=0;
+
+  if(anyKey){
+    const throttle=(driveKeys.fwd?1:0)-(driveKeys.back?1:0);
+    // forward is a NEGATIVE engine force at the rear wheels in cannon's own
+    // convention for this axle/direction setup — verified by simulating it,
+    // not guessed; see CLAUDE.md
+    engineForce = throttle>0 ? -CAR_MAX_ENGINE_FORCE : throttle<0 ? CAR_REVERSE_ENGINE_FORCE : 0;
+    steer=((driveKeys.right?1:0)-(driveKeys.left?1:0))*CAR_MAX_STEER;
+    driveTarget=null; marker.visible=false;
+  } else if(driveTarget){
+    const dx=driveTarget.x-chassisBody.position.x, dz=driveTarget.z-chassisBody.position.z;
+    const dist=Math.hypot(dx,dz);
+    if(dist<=CAR_ARRIVE_DIST){ driveTarget=null; marker.visible=false; brake=CAR_BRAKE_FORCE; }
+    else{
+      const toTarget=Math.atan2(dx,dz);
+      let err=toTarget-yaw; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
+      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*3;
+      const steerErr=reversing?(()=>{ let r=(toTarget+Math.PI)-yaw; while(r>Math.PI) r-=Math.PI*2; while(r<-Math.PI) r+=Math.PI*2; return r; })():err;
+      steer=clampAbs(steerErr*0.6,CAR_MAX_STEER);
+      const speed=Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z);
+      if(reversing) engineForce=CAR_REVERSE_ENGINE_FORCE;
+      else if(dist<8&&speed>3) brake=CAR_BRAKE_FORCE;
+      else engineForce=-CAR_MAX_ENGINE_FORCE*Math.min(1,dist/8);
+    }
+  } else {
+    brake=CAR_BRAKE_FORCE*0.3;   // idle: coast to a gentle stop, not an instant one
+  }
+
+  vehicle.applyEngineForce(engineForce,2); vehicle.applyEngineForce(engineForce,3);
+  vehicle.setSteeringValue(steer,0); vehicle.setSteeringValue(steer,1);
+  for(let w=0;w<4;w++) vehicle.setBrake(brake,w);
+
+  // NOT world.step(1/60, dt, 5) — cannon.js's own documented "recommended"
+  // accumulator form. With dt already clamped near 1/60 in tick(), fixedStep
+  // and timeSinceLastCalled land on almost the same value every frame, and
+  // World.step()'s internalSteps calculation (Math.floor((time+dt)/fixedStep)
+  // - Math.floor(time/fixedStep)) is a floating-point hair away from
+  // computing 0 steps far more often than it should — found by simulating:
+  // engine force and wheel contact both read correctly every frame, the car
+  // just never actually moved. Passing a single argument runs exactly one
+  // real step of that size, no accumulator — verified extensively in
+  // isolated Node before this was ever wired up; see CLAUDE.md.
+  physWorld.step(dt);
+
+  world.car.position.set(chassisBody.position.x,chassisBody.position.y-carRideHeight,chassisBody.position.z);
+  world.car.rotation.y=yaw+CAR_ROT_OFFSET;
+}
+
+/* The from-scratch CarPhysics port (js/carphysics.js) — used only when
+   cannon.js failed to load. Keyboard (WASD/arrows) commands throttle and
+   steering-wheel rate directly, exactly like a real car's pedal and wheel;
+   tap-to-drive falls back to a small steering controller that aims for the
+   same two inputs instead of moving the car itself, so both control schemes
+   run through the identical physics. */
+function driveCarFallback(dt){
   const c=carPhys.properties;
   let throttle=0, wheelTurnSpeed=0;
   const anyKey=driveKeys.fwd||driveKeys.back||driveKeys.left||driveKeys.right;
@@ -1408,13 +1575,21 @@ function enterDriveMode(){
   updatePlayerVisibility();
   moveTarget=null; driveTarget=null; marker.visible=false;
   driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
-  // re-seed carPhys from the car's current (parked or previously-driven) position
-  // and rotation, inverting the fixed model offset so the very first driven
-  // frame doesn't snap; wheelAngle/velocity reset so a stale drive doesn't
-  // carry momentum into a fresh one
-  carPhys.pos=[world.car.position.x,world.car.position.z];
-  carPhys.rot=world.car.rotation.y-CAR_ROT_OFFSET;
-  carPhys.v=[0,0]; carPhys.vrot=0; carPhys.wheelAngle=0;
+  // re-seed whichever physics is driving from the car's current (parked or
+  // previously-driven) position and rotation, inverting the fixed model
+  // offset so the very first driven frame doesn't snap; velocity/steering
+  // reset so a stale drive never carries momentum into a fresh one
+  const yaw=world.car.rotation.y-CAR_ROT_OFFSET;
+  if(USE_CANNON){
+    chassisBody.position.set(world.car.position.x,world.car.position.y+carRideHeight,world.car.position.z);
+    chassisBody.quaternion.setFromEuler(0,yaw,0);
+    chassisBody.velocity.set(0,0,0); chassisBody.angularVelocity.set(0,0,0);
+    vehicle.setSteeringValue(0,0); vehicle.setSteeringValue(0,1);
+  } else {
+    carPhys.pos=[world.car.position.x,world.car.position.z];
+    carPhys.rot=yaw;
+    carPhys.v=[0,0]; carPhys.vrot=0; carPhys.wheelAngle=0;
+  }
   document.getElementById('prompt').style.display='none';
   document.getElementById('exitVehicleBtn').style.display='block';
   const hint=document.getElementById('hint'); if(hint) hint.textContent='WASD/ARROWS OR TAP GROUND TO DRIVE · DRAG TO LOOK';
@@ -1424,7 +1599,7 @@ function exitDriveMode(){
   controlMode='walk';
   // step out beside the car rather than reappearing on top of it
   player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
-  player.yaw=player.targetYaw=carPhys.rot;
+  player.yaw=player.targetYaw=world.car.rotation.y-CAR_ROT_OFFSET;
   updatePlayerVisibility();
   driveTarget=null; marker.visible=false;
   driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
@@ -1453,6 +1628,7 @@ function backToTitle(){
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
   controlMode='walk'; driveTarget=null; carPhys=null;
+  physWorld=null; vehicle=null; chassisBody=null;
   driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
   clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
