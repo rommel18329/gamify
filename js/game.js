@@ -23,6 +23,27 @@ let physWorld=null,vehicle=null,chassisBody=null,carRideHeight=0;   // cannon.js
 const CAR_LENGTH=9.6, CAR_WIDTH=CAR_LENGTH*0.42;
 const CAR_ARRIVE_DIST=1.2, CAR_REVERSE_ANGLE=2.2;   // radians (~126°) — "target is behind" cutoff
 const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-mode collision only
+
+/* The house/garage/yard's shared x — a module constant, not a per-function
+   literal, because every piece of that compound (house, garage, CAR_SPOT, the
+   walkway, the front-door and board interaction spots, the security-upgrade
+   props, the collider boxes) used to hardcode x=-2/x=9 independently, all
+   assuming a house at x=-2. Moving the house to sit across C. Marginal from
+   the colmado (per the owner's reference map) meant shifting all of them by
+   the same amount, so HOME_X is that single anchor: every one of those sites
+   reads HOME_X (or an offset from it) instead of its own copy of -2. Must be
+   declared before CAR_SPOT/COLMADO_POS below, which read it immediately at
+   module-load time — top-level `const` has no hoisting the way a function
+   declaration does.
+   Z was deliberately left untouched — the existing security-fence perimeter
+   already reaches to within ~3 units of C. Marginal's south edge (matching
+   the colmado's own ~3.5-unit clearance on the street's other side), so the
+   two properties already face each other across the street without moving
+   either one in z. This also detaches the garage from AVE_X=9 (the garage
+   used to sit right on the avenue's pavement) — the car now crosses open,
+   unobstructed ground to reach the avenue instead of pulling straight onto
+   it, which is a real change to the geometry, not a bug. */
+const HOME_X=-16;
 const CAR_MAX_ENGINE_FORCE=2600, CAR_REVERSE_ENGINE_FORCE=1300, CAR_MAX_STEER=0.5, CAR_BRAKE_FORCE=60;
 /* WASD/arrow keys drive the car directly — tap-to-drive (touch) still works
    as a fallback and the two never fight: any drive key going down cancels
@@ -288,10 +309,10 @@ function buildGround(){
   // painted stripe on the dirt — same footprint as before so nothing that keys
   // off the player's spawn or the door spot shifts
   const walk=M(new THREE.BoxGeometry(2.6,.22,12),nightMode?0x5B584F:0xACA492,{ink:false,lift:.04});
-  walk.position.set(0,.11,7); scene.add(walk);
+  walk.position.set(HOME_X+2,.11,7); scene.add(walk);
   [-1.45,1.45].forEach(x=>{
     const kerb=M(new THREE.BoxGeometry(.3,.34,12),nightMode?0x6B6659:0xC0B9A8,{ink:false,lift:.04});
-    kerb.position.set(x,.17,7); scene.add(kerb);
+    kerb.position.set(HOME_X+2+x,.17,7); scene.add(kerb);
   });
 }
 
@@ -305,9 +326,12 @@ function buildGround(){
    east-west grid rather than modeled as diagonals, since a rotated road
    would need its own (rotated) collision box, UV-rotated texture handling,
    and road-following logic none of the rest of the world has — not worth
-   it for two decorative cross streets. AVE_X=9 reuses the exact x the
-   driveway/garage/CAR_SPOT have always used, so parking and the garage
-   still sit right on the pavement. */
+   it for two decorative cross streets. AVE_X used to reuse the garage/
+   CAR_SPOT's own x so the garage sat right on the pavement; now that the
+   house (and garage with it) moved to HOME_X to face the colmado across
+   C. Marginal, the garage sits off the avenue in open, unobstructed ground
+   instead — the car just drives across that gap to reach the road, which
+   is a real change to the geometry, not an oversight. */
 const AVE_X=9, AVE_W=9, AVE_Z0=-20, AVE_Z1=70;
 const MARG_Z=23, MARG_W=9;
 function streetSign(text,x,z,rotY){
@@ -403,11 +427,10 @@ function roofKit(g,x,y,z,spanX,spanZ){
   });
 }
 
-/* The house keeps its previous 15 x 11 footprint at (-2,0,-2) and its front-door
-   spot at z=5.62 — tick()'s hard-coded wall collision box, spots(), and the
-   security props all key off those numbers. Only the styling changed: flat
-   concrete roof instead of a gable, painted block with a contrasting skirt,
-   barred windows, and a galería out front. */
+/* The house keeps its 15 x 11 footprint, now at (HOME_X,0,-2) — see HOME_X's
+   own comment for why it moved and why only x did. Its front-door spot stays
+   at z=5.62; buildingColliders(), spots(), and the security props all key off
+   HOME_X rather than their own copies of the old x=-2 literal. */
 function buildHouse(){
   const house=new THREE.Group();
   const WALL=nightMode?0x8A3F53:0xE86A8A;                  // barrio pink
@@ -470,7 +493,7 @@ function buildHouse(){
   const meter=M(new THREE.BoxGeometry(.5,.7,.24),nightMode?0x3D444C:0x5A6470,{inkT:.05});
   meter.position.set(6.4,3.7,5.6); house.add(meter);
 
-  house.position.set(-2,0,-2);
+  house.position.set(HOME_X,0,-2);
   scene.add(house); world.house=house;
 }
 
@@ -493,7 +516,7 @@ function buildGarage(){
   for(let i=1;i<5;i++){   // roll-up door slats
     const line=M(new THREE.BoxGeometry(5.6,.05,.02),0x24262C,{ink:false}); line.position.set(0,.5+i*.62,4.16); garage.add(line);
   }
-  garage.position.set(9,0,-3.5);
+  garage.position.set(HOME_X+11,0,-3.5);   // +11: the same offset from the house it always had
   scene.add(garage); world.garage=garage;
 }
 
@@ -756,7 +779,7 @@ function buildSecurityProps(){
       const led=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8),new THREE.MeshBasicMaterial({color:0xE63946}));
       led.position.set(.86,.10,0); c.add(led);
       const a=(i/n)*Math.PI*2;
-      c.position.set(-2+Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7); c.rotation.y=-a+Math.PI;
+      c.position.set(HOME_X+Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7); c.rotation.y=-a+Math.PI;
       scene.add(c);
     }
   }
@@ -764,16 +787,16 @@ function buildSecurityProps(){
     const n=Math.min(4,sec.lights);
     for(let i=0;i<n;i++){
       const L=M(new THREE.SphereGeometry(.32,12,10),0xF0EAD8,{inkT:.05}); L.scale.set(1.4,.8,.8);
-      L.position.set(-2+(i%2?7.9:-7.9),5.9,-2+(i<2?5.9:-5.9)); scene.add(L);
+      L.position.set(HOME_X+(i%2?7.9:-7.9),5.9,-2+(i<2?5.9:-5.9)); scene.add(L);
       if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.3,24); pl.position.copy(L.position); scene.add(pl); }
     }
   }
-  if(sec.alarm>0){ const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05}); ab.position.set(.4,4.7,5.72); scene.add(ab); }
+  if(sec.alarm>0){ const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05}); ab.position.set(HOME_X+2.4,4.7,5.72); scene.add(ab); }
   if(sec.doors>0){
     const fh=.9+sec.doors*.35;
     const mk=(x,z)=>{ const p=limb(.07,.09,fh,0x5A4630,{inkT:.07}); p.position.set(x,fh/2,z); scene.add(p); };
-    for(let i=-13;i<=13;i+=1.7){ mk(i-2,15.5); mk(i-2,-17.5); }
-    for(let i=-15;i<=15;i+=1.7){ mk(-13.5,i-2); mk(13.5,i-2); }
+    for(let i=-13;i<=13;i+=1.7){ mk(i+HOME_X,15.5); mk(i+HOME_X,-17.5); }
+    for(let i=-15;i<=15;i+=1.7){ mk(HOME_X-11.5,i-2); mk(HOME_X+15.5,i-2); }
   }
   if(sec.dog>0){
     const d=new THREE.Group();
@@ -784,11 +807,11 @@ function buildSecurityProps(){
       const l=limb(.09,.07,.58,0x513520,{inkT:.07}); l.position.set(x,.34,z); d.add(l);
     });
     const t=limb(.07,.04,.55,0x77502F,{inkT:.08}); t.position.set(-.80,.95,0); t.rotation.z=-.8; d.add(t);
-    d.position.set(-8,0,6); scene.add(d); world.dog=d;
+    d.position.set(HOME_X-6,0,6); scene.add(d); world.dog=d;
   }
   if(sec.detail>0){
     const guard=modelPerson()||makePerson(0x1A2028,0xC9884F,.62,{hair:0x14100C});
-    guard.position.set(4.5,0,9); guard.rotation.y=-.6;
+    guard.position.set(HOME_X+6.5,0,9); guard.rotation.y=-.6;
     scene.add(guard); world.guard=guard;
   }
 }
@@ -805,7 +828,7 @@ function buildSecurityProps(){
    over a dozen units, which is really a contact solver violently correcting
    a spawn-time interpenetration. z=7 clears the garage's z<=0.5 edge with
    real margin (rear bumper at 7-4.8=2.2). Found by tracing exactly that. */
-const CAR_SPOT=new THREE.Vector3(9,0,7), CAR_ROT_OFFSET=Math.PI/2;
+const CAR_SPOT=new THREE.Vector3(HOME_X+11,0,7), CAR_ROT_OFFSET=Math.PI/2;
 function buildCar(){
   world.car=modelCar(S.vehicle.paint)||makeCar();
   world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
@@ -830,6 +853,42 @@ function buildCar(){
    still re-verified after this change, same as any colmado-position edit should be. */
 const COLMADO_POS=new THREE.Vector3(-16,0,34);
 
+/* ---- generic placeholder buildings ----
+   Fills out the block the way the owner's reference map showed it — several
+   plain structures around the colmado and across the avenue — without
+   inventing detail (colour, signage, a purpose) the reference doesn't
+   actually specify for them. Deliberately plainer than the house/garage/
+   colmado: a body, a roof cap, a skirt band, nothing else, so they read as
+   "another building on the block" rather than competing with the three
+   buildings that actually matter for gameplay. Real, solid buildings though
+   — {w,d} feeds buildingColliders() below the same as any other structure,
+   so the car can't drive through a placeholder any more than the colmado. */
+const PLACEHOLDER_BUILDINGS=[
+  {x:-36,z:34,w:8,d:8,h:4.2},     // west of the colmado, its side of C. Marginal
+  {x:-31,z:44,w:7,d:7,h:3.6},
+  {x:-46,z:35,w:9,d:7,h:4.8},
+  {x:20,z:34,w:8,d:8,h:5.2},      // across the avenue from the colmado block
+  {x:36,z:34,w:8,d:8,h:4.2},
+  {x:28,z:46,w:7,d:9,h:3.8},
+  {x:44,z:42,w:7,d:7,h:4.6},
+  {x:-38,z:-6,w:6,d:8,h:4.0}      // south of C. Marginal, the house's side of the block
+];
+function buildPlaceholders(){
+  const wallCols=[0xC9B896,0xB8AE96,0xA8A088,0xBFAE9E];
+  PLACEHOLDER_BUILDINGS.forEach((b,i)=>{
+    const g=new THREE.Group();
+    const body=M(new THREE.BoxGeometry(b.w,b.h,b.d),nightMode?0x5E594D:wallCols[i%wallCols.length],
+      {inkT:.018,map:detailMap('wall',Math.max(2,Math.round(b.w/3)),1)});
+    body.position.y=b.h/2; g.add(body);
+    const skirt=M(new THREE.BoxGeometry(b.w+.1,.8,b.d+.1),nightMode?0x3D3A30:0x8A8069,{inkT:.02});
+    skirt.position.y=.4; g.add(skirt);
+    const roof=M(new THREE.BoxGeometry(b.w+.4,.3,b.d+.4),nightMode?0x4A463E:0xBFB6A4,{inkT:.02});
+    roof.position.y=b.h+.15; g.add(roof);
+    g.position.set(b.x,0,b.z);
+    scene.add(g);
+  });
+}
+
 /* ---- building collision ----
    Solid walls that neither the player nor the driven car can pass through.
    Boxes are axis-aligned in world space, sized from each building's own known
@@ -841,10 +900,11 @@ const COLMADO_POS=new THREE.Vector3(-16,0,34);
    house feel like fighting the geometry. */
 function buildingColliders(){
   return [
-    {minX:-9.5,maxX:5.5,minZ:-7.5,maxZ:3.5},                                   // house (15x11 @ -2,-2)
-    {minX:5.5,maxX:12.5,minZ:-7.5,maxZ:0.5},                                   // garage (7x8 @ 9,-3.5)
+    {minX:HOME_X-7.5,maxX:HOME_X+7.5,minZ:-7.5,maxZ:3.5},                      // house (15x11 @ HOME_X,-2)
+    {minX:HOME_X+7.5,maxX:HOME_X+14.5,minZ:-7.5,maxZ:0.5},                     // garage (7x8 @ HOME_X+11,-3.5)
     {minX:COLMADO_POS.x-5,maxX:COLMADO_POS.x+5,                                // colmado (10x6) + street clutter
-     minZ:COLMADO_POS.z-3,maxZ:COLMADO_POS.z+4.6}
+     minZ:COLMADO_POS.z-3,maxZ:COLMADO_POS.z+4.6},
+    ...PLACEHOLDER_BUILDINGS.map(b=>({minX:b.x-b.w/2,maxX:b.x+b.w/2,minZ:b.z-b.d/2,maxZ:b.z+b.d/2}))
   ];
 }
 /* Pushes pos out of any collider it has penetrated, along whichever axis needs
@@ -951,7 +1011,7 @@ function buildBoard(){
   const bp=limb(.09,.11,2.0,0x5A4630,{inkT:.07}); bp.position.y=1.0; board.add(bp);
   const pan=M(new THREE.BoxGeometry(2.4,1.5,.14),0xEFEADC,{inkT:.03}); pan.position.y=2.3; board.add(pan);
   const gr=M(new THREE.BoxGeometry(2.0,1.15,.06),0x5C7A4A,{ink:false}); gr.position.set(0,2.3,.10); board.add(gr);
-  board.position.set(-7.5,0,7.5);
+  board.position.set(HOME_X-5.5,0,7.5);
   scene.add(board); world.board=board;
 }
 
@@ -985,7 +1045,7 @@ function buildPlayer(){
   // default over-the-shoulder camera (camYaw=PI, ~9.5 units behind the player) settles
   // in open street — at the old z=14 spawn it converged to roughly z=23, which sat
   // *inside* the colmado at z=24 and rendered as a wall of its mint-green trim filling the screen.
-  playerGroup.position.set(0,0,6);
+  playerGroup.position.set(HOME_X+2,0,6);
   scene.add(playerGroup);
   player={pos:playerGroup.position,yaw:Math.PI,walkT:0,targetYaw:Math.PI};
 }
@@ -1014,6 +1074,7 @@ function buildWorld(){
 
   buildGround();
   buildStreets();
+  buildPlaceholders();
   buildHouse();
   buildGarage();
   const colPos=COLMADO_POS;
@@ -1042,8 +1103,8 @@ function buildWorld(){
 function spots(){
   return [
     {key:'car',nm:'YOUR VEHICLE',hint:'Drive or view garage',p:CAR_SPOT,r:5,act:()=>openCarMenu()},
-    {key:'door',nm:'FRONT DOOR',hint:'Home security',p:new THREE.Vector3(-2,0,5.6),r:3.6,act:()=>openSecurity()},
-    {key:'board',nm:'THE BOARD',hint:'Log your day',p:new THREE.Vector3(-7.5,0,7.5),r:3.6,act:()=>openLog()},
+    {key:'door',nm:'FRONT DOOR',hint:'Home security',p:new THREE.Vector3(HOME_X,0,5.6),r:3.6,act:()=>openSecurity()},
+    {key:'board',nm:'THE BOARD',hint:'Log your day',p:new THREE.Vector3(HOME_X-5.5,0,7.5),r:3.6,act:()=>openLog()},
     {key:'colmado',nm:'EL COLMADO',hint:'Say what\'s up',p:COLMADO_POS,r:6,act:()=>colmadoGreet()}
   ];
 }
@@ -1450,7 +1511,7 @@ function tick(){
   }
 
   if(world.dog){
-    world.dog.position.x=-8+Math.sin(clock.elapsedTime*.5)*3.2;
+    world.dog.position.x=HOME_X-6+Math.sin(clock.elapsedTime*.5)*3.2;
     world.dog.rotation.y=Math.cos(clock.elapsedTime*.5)>0?0:Math.PI;
   }
   updateAnimated(dt);   // every rigged character, moving or standing

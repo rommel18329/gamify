@@ -422,16 +422,17 @@ geometry.
 ## Streets
 
 `buildStreets()` in `js/game.js` builds two named, gray-paved streets —
-`AV. INDEPENDENCIA` (the main through avenue, reusing the exact x the
-driveway/garage/`CAR_SPOT` have always used, just extended much further in
-z so there's real room to drive) and `C. MARGINAL` (crossing it between the
+`AV. INDEPENDENCIA` (the main through avenue, extended much further in z
+so there's real room to drive) and `C. MARGINAL` (crossing it between the
 house and the colmado) — loosely modeled on a real Santo Domingo
 intersection the owner shared, with a legible sign at each. This is a
 stylized approximation, not a traced map: real street angles/curves are
 collapsed onto the existing north-south/east-west grid rather than modeled
 as diagonals, since a rotated road would need its own rotated collision
 box, UV-rotated texture handling, and road-following logic nothing else in
-the world has.
+the world has. `AVE_X` no longer doubles as the garage/`CAR_SPOT` x (see
+`HOME_X` below) — the avenue is now a through street the car drives *to*,
+not one the garage parks directly on.
 
 `streetSign()` builds each sign as **two single-sided plates back to
 back**, not one plate with a `DoubleSide` material — a `DoubleSide`
@@ -439,6 +440,53 @@ material mirrors the same texture onto its back face, which read as
 reversed, unreadable text to traffic approaching from the other direction
 the first time this was built. If you add another sign, copy that pattern
 rather than reaching for `DoubleSide` on a textured plane.
+
+### HOME_X — the house sits across C. Marginal from the colmado
+
+`HOME_X` (`js/game.js`) is the house/garage/yard compound's shared x,
+matching the owner's own reference map: the house faces the colmado
+directly across `C. MARGINAL`, in the same way `COLMADO_POS` anchors the
+colmado's own block. Every site that used to hardcode its own x assuming a
+house at `x=-2` — `buildHouse()`, `buildGarage()`, `CAR_SPOT`, the walkway
+in `buildGround()`, the front-door/board spots in `spots()`, `buildBoard()`,
+`buildPlayer()`'s spawn, every prop in `buildSecurityProps()` (including
+the fence posts and the dog's per-frame patrol x in `tick()`), and the
+house/garage entries in `buildingColliders()` — now reads `HOME_X` (or a
+fixed offset from it) instead. **z was deliberately left untouched**: the
+existing security-fence perimeter already reaches to within ~3 units of
+C. Marginal's south edge, closely matching the colmado's own ~3.5-unit
+clearance on the street's other side, so the two properties already faced
+each other across the street without moving either one in z — only x
+needed to change. `HOME_X` must be declared *before* `CAR_SPOT`/
+`COLMADO_POS` in the file, since those read it immediately at module-load
+time; top-level `const` has no hoisting the way a function declaration
+does, unlike everything that merely *uses* `HOME_X` from inside a function
+body, which is free to be declared anywhere textually since it won't run
+until called.
+
+Moving the house off `x=-2` detached the garage from `AVE_X=9` — the
+garage used to sit right on the avenue's own pavement (same x), and now
+sits in open ground near the house instead, with the car crossing that gap
+to reach the avenue rather than pulling straight onto it. That's a real
+change to the geometry, not an oversight: re-verify it if you ever move
+`HOME_X` again, the same way any `COLMADO_POS` move gets re-verified below.
+
+### Placeholder buildings
+
+`PLACEHOLDER_BUILDINGS` + `buildPlaceholders()` (`js/game.js`) fill out the
+block the way the reference map showed it — several buildings clustered
+around the colmado and across the avenue — without inventing a purpose,
+colour scheme, or detail level the reference doesn't specify for them.
+Each is just a body + a roof cap + a skirt band, deliberately plainer than
+the house/garage/colmado so they read as "the rest of the block" rather
+than competing with the buildings that actually matter for gameplay. They
+are still real, solid buildings: `buildingColliders()` maps over the same
+`{x,z,w,d}` array to generate their collider boxes, so the car can't drive
+through one any more than it can drive through the colmado. If you add
+another one, check it against every existing collider *and* both streets
+before picking coordinates — `buildPlaceholders()`'s own entries were
+re-positioned once already after a couple of them turned out to overlap
+C. Marginal's pavement.
 
 `COLMADO_POS` sits west of the avenue and further out in z than the
 house/garage specifically to leave `C. MARGINAL` a clear gap to cross
@@ -454,6 +502,7 @@ moving it *closer* is the direction that needs re-verifying.
 - No cloud save / accounts — see Backup above.
 - No camera collision — see Camera above.
 - No collision against porch columns, awnings, street furniture, or NPCs —
-  see Collision above; only the three buildings' walls are solid.
+  see Collision above; only `buildingColliders()`'s boxes (house, garage,
+  colmado, and the placeholder buildings) are solid.
 - Workout schedule (`SCHED`) is a fixed Mon-Sat push/pull/legs split with
   Sun/Thu off — not user-configurable by design.
