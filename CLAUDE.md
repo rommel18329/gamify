@@ -272,17 +272,16 @@ function rather than scattering `cameraMode` checks around.
 ## Movement & driving
 
 `tick()` in `js/game.js` runs one of two branches depending on `controlMode`
-(`'walk'` or `'drive'`), both built on two small shared helpers —
-`seekTarget(pos, target, speed, dt)` (move a position toward a point,
-returns whether it arrived/is moving and the heading to face) and
-`smoothYaw(current, target, rate, dt)` (turn toward a heading at a given
-rate). The walking player and the driven car each call these with their own
-speed/turn-rate constants rather than duplicating the seek-and-turn math.
-`enterDriveMode()`/`exitDriveMode()` (also `js/game.js`) swap which
-transform `handleTap()` sends taps to, hide/show `playerGroup`, and
-toggle the `#exitVehicleBtn` HUD button. `backToTitle()` resets
-`controlMode` back to `'walk'` — don't remove that, or leaving to the title
-screen mid-drive would carry the mode into the next session with the
+(`'walk'` or `'drive'`). Walking still uses the original small shared
+helpers — `seekTarget(pos, target, speed, dt)` (move a position directly
+toward a point, returns whether it arrived/is moving and the heading to
+face) and `smoothYaw(current, target, rate, dt)` (turn toward a heading at
+a given rate) — a person can strafe/turn independently of their facing
+without looking wrong. `enterDriveMode()`/`exitDriveMode()` (also
+`js/game.js`) swap which transform `handleTap()` sends taps to, hide/show
+`playerGroup`, and toggle the `#exitVehicleBtn` HUD button. `backToTitle()`
+resets `controlMode` back to `'walk'` — don't remove that, or leaving to the
+title screen mid-drive would carry the mode into the next session with the
 player mesh still hidden.
 
 The car itself is a backdrop-adjacent object, not inside the garage: see
@@ -293,9 +292,52 @@ purchase) preserves the car's *current* position/rotation rather than
 resetting to `CAR_SPOT`, since the car may not be parked there anymore
 once it's driveable.
 
+### Car physics
+
+Driving does **not** reuse `seekTarget()` — a car moving in a straight line
+directly toward the tapped point regardless of which way it's facing reads
+as crabbing sideways into its own turns, since a vehicle can only actually
+move along its own heading. `driveCar(dt)` in `js/game.js` instead runs a
+small "bicycle model" (the standard simplification used by most simple
+arcade car physics — see e.g. `oseiskar/js-car` on GitHub, MIT, which
+frames a car as "a motorcycle that does not bank"): `carSpeed` eases toward
+a target speed via `CAR_ACCEL`/`CAR_BRAKE` instead of snapping to it, the
+car always moves forward (or backward) along its *own* `carYaw`, and
+steering authority (`CAR_TURN_RATE_LOW` at rest down to `CAR_TURN_RATE_HIGH`
+at `CAR_MAX_SPEED`) shrinks as speed rises — the same reason a real car
+can pivot tightly in a parking lot but needs a wide arc at speed. Tapping a
+point more than `CAR_REVERSE_ANGLE` radians behind the car's current
+heading reverses into it (`CAR_REVERSE_SPEED`) rather than trying to steer
+a forward-only vehicle through a U-turn on the spot. If you retune any of
+these constants, re-run `checkphysics.js`-style trail logging (sample
+`world.car.position` every frame while driving to a point off to one side)
+and confirm the path curves smoothly rather than snapping — that was the
+whole point of replacing `seekTarget()` here.
+
+## Collision
+
+`resolveCollisions(pos, radius)` in `js/game.js` pushes a position out of
+whichever building it's penetrated, along whichever axis needs the smaller
+correction, and reports whether it did. `buildingColliders()` lists one
+axis-aligned box per building (house, garage, colmado — the colmado's box
+is padded further on its street-facing side than its actual wall, to also
+block the counter/crates/gas-cylinder clutter sitting in front of it) built
+from the same numbers `buildHouse()`/`buildGarage()`/`buildColmado()` use,
+plus `COLMADO_POS`, so the two can't drift apart independently. `tick()`
+calls it for both the walking player (`PLAYER_RADIUS`) and the driven car
+(`CAR_RADIUS`) every frame; a hit cancels the pending `moveTarget`/
+`driveTarget` (and zeroes `carSpeed`) rather than leaving the seek logic
+pushing into the wall every frame, which would otherwise jitter the
+position back and forth against it. Porch columns, awnings and the domino
+table are deliberately NOT collidable — thin single posts, not walls, and
+colliding with every one of them would make walking near the house feel
+like fighting the geometry.
+
 ## Known deliberate non-features
 
 - No cloud save / accounts — see Backup above.
 - No camera collision — see Camera above.
+- No collision against porch columns, awnings, street furniture, or NPCs —
+  see Collision above; only the three buildings' walls are solid.
 - Workout schedule (`SCHED`) is a fixed Mon-Sat push/pull/legs split with
   Sun/Thu off — not user-configurable by design.
