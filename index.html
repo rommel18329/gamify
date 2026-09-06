@@ -46,6 +46,22 @@
   <button id="exitVehicleBtn" class="hbtn accent"
     style="display:none;position:absolute;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);z-index:10;"
     onclick="exitDriveMode()">EXIT VEHICLE</button>
+  <!-- Pedal controls, shown only while driving (enterDriveMode/exitDriveMode).
+       Steering sits under the left thumb and the pedals under the right, so
+       both are reachable at once on a phone held in landscape. Bound in
+       bindDriveHud() with pointer events rather than onclick, since driving
+       means holding several of these down simultaneously. -->
+  <div id="driveHud" style="display:none">
+    <div id="speedo">0 KM/H</div>
+    <div class="dpad left">
+      <button id="steerLeft" class="pedal steer">‹</button>
+      <button id="steerRight" class="pedal steer">›</button>
+    </div>
+    <div class="dpad right">
+      <button id="brakePedal" class="pedal brake">BRAKE<small>REVERSE</small></button>
+      <button id="gasPedal" class="pedal gas">GAS</button>
+    </div>
+  </div>
   <div id="raidBar"></div>
   <div id="prompt">
     <div class="pb"><div class="pl"></div><div class="ph"></div></div>

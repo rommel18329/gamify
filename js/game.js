@@ -8,7 +8,6 @@ let drag={down:false,moved:false,x:0,y:0,t:0,id:null};
 
 /* 'walk' (default) or 'drive' — see enterDriveMode()/exitDriveMode() */
 let controlMode='walk';
-let driveTarget=null;
 /* Driving physics: js/vendor/cannon.js (MIT) when it loads — a real rigid-body
    chassis on 4 raycast wheels with actual suspension, driven by
    driveCarCannon() below — falling back to CarPhysics (js/carphysics.js, a
@@ -21,7 +20,6 @@ const USE_CANNON=typeof CANNON!=='undefined';
 let carPhys=null;                        // fallback physics (see driveCarFallback())
 let physWorld=null,vehicle=null,chassisBody=null,carRideHeight=0;   // cannon.js state
 const CAR_LENGTH=9.6, CAR_WIDTH=CAR_LENGTH*0.42;
-const CAR_ARRIVE_DIST=1.2, CAR_REVERSE_ANGLE=2.2;   // radians (~126°) — "target is behind" cutoff
 const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-mode collision only
 
 /* The house/garage/yard's shared x — a module constant, not a per-function
@@ -44,12 +42,43 @@ const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-
    unobstructed ground to reach the avenue instead of pulling straight onto
    it, which is a real change to the geometry, not a bug. */
 const HOME_X=-16;
-const CAR_MAX_ENGINE_FORCE=2600, CAR_REVERSE_ENGINE_FORCE=1300, CAR_MAX_STEER=0.5, CAR_BRAKE_FORCE=60;
-/* WASD/arrow keys drive the car directly — tap-to-drive (touch) still works
-   as a fallback and the two never fight: any drive key going down cancels
-   the pending tap target, and tapping the ground while no key is held goes
-   back to steering toward that point. */
-const driveKeys={fwd:false,back:false,left:false,right:false};
+/* Car handling. These are tuned numbers, not guesses — every one was measured
+   in isolated Node against the real cannon.js vehicle (top speed, 0-to-stop
+   distance, 180-degree turn time, peak slip angle, chassis uprightness) before
+   being written here; see CLAUDE.md for the repro. Retune them the same way.
+
+   CAR_TOP_SPEED is enforced by tapering engine force toward zero as the car
+   approaches it rather than by clamping velocity — a hard velocity clamp
+   fights the solver and reads as the car hitting an invisible wall. There is
+   no drag in this world, so without the taper, holding W accelerates forever
+   (measured: still climbing past 21 u/s after 6 seconds, which is what made
+   driving feel uncontrollable). */
+const CAR_TOP_SPEED=22;                                    // world units/sec (~35 km/h at this world's scale)
+const CAR_MAX_ENGINE_FORCE=3400, CAR_REVERSE_FRAC=0.45;
+const CAR_BRAKE_FORCE=220, CAR_IDLE_BRAKE=6;               // idle: coast down, don't stop dead
+/* Max steering lock falls off with speed (STEER_LOW at a standstill toward
+   STEER_HIGH at CAR_TOP_SPEED): full lock is what you want when parking and
+   what spins you out at speed. CAR_STEER_RATE ramps the wheel toward that
+   lock instead of snapping to it — instant full lock was the other half of
+   why this felt broken. */
+const CAR_STEER_LOW=0.66, CAR_STEER_HIGH=0.36, CAR_STEER_RATE=3.5;
+const CAR_ANGULAR_DAMPING=0.4;   // bleeds off yaw spin so the car settles instead of pirouetting
+const CAR_CREEP_SPEED=0.5;       // below this, the brake pedal means "reverse", not "stop"
+const UNITS_PER_METRE=CAR_LENGTH/4.4;   // the car is a ~4.4m sedan — only used for the km/h readout
+let carSteer=0;                  // current front-wheel angle, ramped toward the target each frame
+
+/* Driving input, pedal-style (Car Parking Multiplayer's scheme), NOT tap-to-move:
+   a car that drives itself to a tapped point can't be parked, which is the
+   whole point of driving one. Both the on-screen pedals (#driveHud, bound in
+   bindDriveHud()) and the keyboard write into this same object, so the two
+   control schemes are literally the same input path and can't drift apart.
+
+   `gas` and `brake` are 0..1 rather than booleans so an analog input (a
+   pressure-sensitive pedal, a gamepad trigger) could feed them later without
+   touching the physics. `brake` is one pedal doing two jobs, exactly like the
+   mobile driving games this is modelled on: it brakes while the car is moving
+   forward, and becomes reverse once it has stopped — see driveCarCannon(). */
+const driveInput={gas:0,brake:0,left:false,right:false};
 
 /* 'orbit' (default third-person follow-cam) or 'first' — see toggleCameraMode() */
 let cameraMode='orbit';
@@ -970,6 +999,7 @@ function buildVehicle(){
   // throttle after idling). A drivable vehicle should always respond the
   // instant the player touches the controls, however long it's been parked.
   chassisBody.allowSleep=false;
+  chassisBody.angularDamping=CAR_ANGULAR_DAMPING;
   chassisBody.addShape(chassisShape);
   chassisBody.position.set(CAR_SPOT.x,2.5,CAR_SPOT.z);
   physWorld.addBody(chassisBody);
@@ -1279,12 +1309,10 @@ function objectHit(nx,ny){
   return null;
 }
 function handleTap(nx,ny){
-  if(controlMode==='drive'){
-    const g=screenToGround(nx,ny);
-    if(g){ g.x=Math.max(-45,Math.min(45,g.x)); g.z=Math.max(-45,Math.min(45,g.z));
-      driveTarget=g.clone(); showMarker(g,false); }
-    return;
-  }
+  // Driving is pedals only — a tap in drive mode does nothing (dragging still
+  // orbits the camera). A car that steers itself toward a tapped point can't
+  // be parked, and parking is the point of driving one.
+  if(controlMode==='drive') return;
   if(intruders.length&&tapIntruder(nx,ny)) return;
   const spot=objectHit(nx,ny);
   if(spot){ moveTarget=spot.p.clone(); pendingSpot=spot; showMarker(spot.p,true); return; }
@@ -1327,10 +1355,8 @@ function smoothYaw(current, target, rate, dt){
 }
 /* Drives world.car one physics step. Uses the real cannon.js RaycastVehicle
    when it loaded (driveCarCannon()); otherwise falls back to the from-scratch
-   CarPhysics port (driveCarFallback()). Both take the same two kinds of
-   input — WASD/arrows directly, or a small steering controller aiming a
-   tap-to-drive target — so the control feel matches either way; only the
-   physics underneath differs. */
+   CarPhysics port (driveCarFallback()). Both read the same driveInput pedals,
+   so the control feel matches either way; only the physics underneath differs. */
 function driveCar(dt){
   if(USE_CANNON) driveCarCannon(dt); else driveCarFallback(dt);
 }
@@ -1343,38 +1369,41 @@ function driveCarCannon(dt){
   const q=chassisBody.quaternion;
   const fwdX=2*(q.x*q.z+q.y*q.w), fwdZ=1-2*(q.x*q.x+q.y*q.y);
   const yaw=Math.atan2(fwdX,fwdZ);
-  const anyKey=driveKeys.fwd||driveKeys.back||driveKeys.left||driveKeys.right;
-  let engineForce=0, steer=0, brake=0;
+  let engineForce=0, steerTarget=0, brake=0;
 
-  if(anyKey){
-    const throttle=(driveKeys.fwd?1:0)-(driveKeys.back?1:0);
+  // Speed-dependent limits. `taper` is what enforces CAR_TOP_SPEED: full force
+  // from a standstill, nothing left once you're there.
+  const speed=Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z);
+  const speedFrac=Math.min(1,speed/CAR_TOP_SPEED);
+  const taper=Math.max(0,1-speedFrac*speedFrac);
+  const maxSteer=CAR_STEER_LOW+(CAR_STEER_HIGH-CAR_STEER_LOW)*speedFrac;
+  // Signed speed along the car's own heading — the sign is what separates
+  // "brake pedal should slow me down" from "brake pedal should reverse me",
+  // which |velocity| alone can't tell you.
+  const fwdSpeed=chassisBody.velocity.x*Math.sin(yaw)+chassisBody.velocity.z*Math.cos(yaw);
+
+  if(driveInput.brake){
+    // one pedal, two jobs: brake while rolling forward, reverse once stopped
+    if(fwdSpeed>CAR_CREEP_SPEED) brake=CAR_BRAKE_FORCE*driveInput.brake;
+    else engineForce=CAR_MAX_ENGINE_FORCE*CAR_REVERSE_FRAC*taper*driveInput.brake;
+  } else if(driveInput.gas){
     // forward is a NEGATIVE engine force at the rear wheels in cannon's own
     // convention for this axle/direction setup — verified by simulating it,
     // not guessed; see CLAUDE.md
-    engineForce = throttle>0 ? -CAR_MAX_ENGINE_FORCE : throttle<0 ? CAR_REVERSE_ENGINE_FORCE : 0;
-    steer=((driveKeys.right?1:0)-(driveKeys.left?1:0))*CAR_MAX_STEER;
-    driveTarget=null; marker.visible=false;
-  } else if(driveTarget){
-    const dx=driveTarget.x-chassisBody.position.x, dz=driveTarget.z-chassisBody.position.z;
-    const dist=Math.hypot(dx,dz);
-    if(dist<=CAR_ARRIVE_DIST){ driveTarget=null; marker.visible=false; brake=CAR_BRAKE_FORCE; }
-    else{
-      const toTarget=Math.atan2(dx,dz);
-      let err=toTarget-yaw; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
-      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*3;
-      const steerErr=reversing?(()=>{ let r=(toTarget+Math.PI)-yaw; while(r>Math.PI) r-=Math.PI*2; while(r<-Math.PI) r+=Math.PI*2; return r; })():err;
-      steer=clampAbs(steerErr*0.6,CAR_MAX_STEER);
-      const speed=Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z);
-      if(reversing) engineForce=CAR_REVERSE_ENGINE_FORCE;
-      else if(dist<8&&speed>3) brake=CAR_BRAKE_FORCE;
-      else engineForce=-CAR_MAX_ENGINE_FORCE*Math.min(1,dist/8);
-    }
+    engineForce=-CAR_MAX_ENGINE_FORCE*taper*driveInput.gas;
   } else {
-    brake=CAR_BRAKE_FORCE*0.3;   // idle: coast to a gentle stop, not an instant one
+    brake=CAR_IDLE_BRAKE;   // idle: coast to a gentle stop, not an instant one
   }
+  steerTarget=((driveInput.right?1:0)-(driveInput.left?1:0))*maxSteer;
+
+  // Ramp the wheel toward the target rather than snapping to it; self-centering
+  // (no steering input) is faster than turning in, the way a real wheel returns.
+  const steerRate=steerTarget?CAR_STEER_RATE:CAR_STEER_RATE*1.6;
+  carSteer+=clampAbs(steerTarget-carSteer,steerRate*dt);
+  carSteer=clampAbs(carSteer,maxSteer);
 
   vehicle.applyEngineForce(engineForce,2); vehicle.applyEngineForce(engineForce,3);
-  vehicle.setSteeringValue(steer,0); vehicle.setSteeringValue(steer,1);
+  vehicle.setSteeringValue(carSteer,0); vehicle.setSteeringValue(carSteer,1);
   for(let w=0;w<4;w++) vehicle.setBrake(brake,w);
 
   // NOT world.step(1/60, dt, 5) — cannon.js's own documented "recommended"
@@ -1394,40 +1423,27 @@ function driveCarCannon(dt){
 }
 
 /* The from-scratch CarPhysics port (js/carphysics.js) — used only when
-   cannon.js failed to load. Keyboard (WASD/arrows) commands throttle and
-   steering-wheel rate directly, exactly like a real car's pedal and wheel;
-   tap-to-drive falls back to a small steering controller that aims for the
-   same two inputs instead of moving the car itself, so both control schemes
-   run through the identical physics. */
+   cannon.js failed to load. Reads the same driveInput pedals as the cannon
+   path above and maps them onto this engine's own throttle / steering-rack
+   rate, so the pedals behave the same way whichever physics is running. */
 function driveCarFallback(dt){
   const c=carPhys.properties;
   let throttle=0, wheelTurnSpeed=0;
-  const anyKey=driveKeys.fwd||driveKeys.back||driveKeys.left||driveKeys.right;
-  if(anyKey){
-    throttle=(driveKeys.fwd?1:0)-(driveKeys.back?1:0);
-    if(throttle<0) throttle*=0.5;   // reverse gear is slower than the engine's forward output
-    wheelTurnSpeed=((driveKeys.right?1:0)-(driveKeys.left?1:0))*c.wheelTurnSpeed;
-    driveTarget=null; marker.visible=false;
-  } else if(driveTarget){
-    const dx=driveTarget.x-carPhys.pos[0], dz=driveTarget.z-carPhys.pos[1];
-    const dist=Math.hypot(dx,dz);
-    if(dist<=CAR_ARRIVE_DIST){
-      driveTarget=null; marker.visible=false;
-    } else {
-      const toTarget=Math.atan2(dx,dz);
-      let err=toTarget-carPhys.rot; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
-      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*3;
-      const steerErr=reversing ? (()=>{ let r=(toTarget+Math.PI)-carPhys.rot; while(r>Math.PI) r-=Math.PI*2; while(r<-Math.PI) r+=Math.PI*2; return r; })() : err;
-      const desiredWheel=clampAbs(steerErr*1.6,c.maxWheelAngle);
-      wheelTurnSpeed=clampAbs((desiredWheel-carPhys.wheelAngle)*10,c.wheelTurnSpeed);
-      if(reversing) throttle=-0.45;
-      else{
-        const speed=carPhys.getSpeed();
-        throttle = (dist<8&&speed>3) ? -1 : Math.min(1,dist/8);
-      }
-    }
+  // this engine tracks its own heading, so forward speed is a direct dot
+  const fwdSpeed=carPhys.v[0]*Math.sin(carPhys.rot)+carPhys.v[1]*Math.cos(carPhys.rot);
+
+  if(driveInput.brake){
+    // same one-pedal-two-jobs rule as driveCarCannon()
+    if(fwdSpeed>CAR_CREEP_SPEED) throttle=-driveInput.brake;
+    else throttle=-CAR_REVERSE_FRAC*driveInput.brake;
+  } else if(driveInput.gas){
+    throttle=driveInput.gas;
+  }
+
+  if(driveInput.left||driveInput.right){
+    wheelTurnSpeed=((driveInput.right?1:0)-(driveInput.left?1:0))*c.wheelTurnSpeed;
   } else {
-    // idle: no input held, let the wheel self-center like a real steering rack
+    // no steering input: let the wheel self-center like a real steering rack
     wheelTurnSpeed=clampAbs(-carPhys.wheelAngle*8,c.wheelTurnSpeed);
   }
 
@@ -1435,23 +1451,76 @@ function driveCarFallback(dt){
 
   const p=tmpVec3.set(carPhys.pos[0],0,carPhys.pos[1]);
   if(resolveCollisions(p,CAR_RADIUS)){
-    carPhys.v=[0,0]; carPhys.vrot=0; driveTarget=null; marker.visible=false;
+    carPhys.v=[0,0]; carPhys.vrot=0;
   }
   carPhys.pos=[p.x,p.z];
   world.car.position.set(p.x,0,p.z);
   world.car.rotation.y=carPhys.rot+CAR_ROT_OFFSET;
 }
 const tmpVec3=new THREE.Vector3();
-/* Maps WASD and the arrow keys onto driveKeys — read every frame by driveCar()
+/* Maps WASD and the arrow keys onto driveInput — read every frame by driveCar()
    above, only ever acted on while controlMode==='drive'. Harmless to update
-   while walking; tick() simply never looks at driveKeys outside drive mode. */
+   while walking; tick() simply never looks at driveInput outside drive mode.
+
+   The keyboard is the desktop convenience, not the primary control scheme —
+   the on-screen pedals are (see bindDriveHud()), since this is played on a
+   phone where there is no keyboard. Both write the same driveInput fields, so
+   whichever is used the physics sees identical input. */
 function setDriveKey(key,down){
   switch(key.toLowerCase()){
-    case 'w': case 'arrowup': driveKeys.fwd=down; break;
-    case 's': case 'arrowdown': driveKeys.back=down; break;
-    case 'a': case 'arrowleft': driveKeys.left=down; break;
-    case 'd': case 'arrowright': driveKeys.right=down; break;
+    case 'w': case 'arrowup': driveInput.gas=down?1:0; break;
+    case 's': case 'arrowdown': case ' ': driveInput.brake=down?1:0; break;
+    case 'a': case 'arrowleft': driveInput.left=down; break;
+    case 'd': case 'arrowright': driveInput.right=down; break;
   }
+  syncPedalUI();
+}
+function clearDriveInput(){
+  driveInput.gas=0; driveInput.brake=0; driveInput.left=false; driveInput.right=false;
+  carSteer=0; syncPedalUI();
+}
+/* Mirrors driveInput onto the on-screen pedals' pressed styling, so driving
+   with the keyboard lights up the same buttons a finger would — and so a
+   pointer lost off the edge of a pedal can't leave it stuck looking held. */
+function syncPedalUI(){
+  const set=(id,on)=>{ const el=document.getElementById(id); if(el) el.classList.toggle('held',!!on); };
+  set('gasPedal',driveInput.gas); set('brakePedal',driveInput.brake);
+  set('steerLeft',driveInput.left); set('steerRight',driveInput.right);
+}
+/* Wires the pedal HUD. Uses pointer events (not click, not touchstart alone)
+   because driving needs several controls held AT ONCE — gas plus a steer
+   button is the normal case — and pointer events report each finger as its
+   own pointerId. Capturing the pointer on press means the release still lands
+   on the right control even if the finger slides off it mid-corner, which is
+   what otherwise leaves a pedal stuck down. */
+function bindDriveHud(){
+  const bind=(id,on,off)=>{
+    const el=document.getElementById(id); if(!el) return;
+    const press=e=>{ e.preventDefault(); e.stopPropagation();
+      try{ el.setPointerCapture(e.pointerId); }catch(_){ }
+      on(); syncPedalUI(); };
+    const release=e=>{ e.preventDefault(); e.stopPropagation();
+      try{ el.releasePointerCapture(e.pointerId); }catch(_){ }
+      off(); syncPedalUI(); };
+    el.addEventListener('pointerdown',press);
+    el.addEventListener('pointerup',release);
+    el.addEventListener('pointercancel',release);
+    // a context menu (iOS long-press, right click) would swallow the pointerup
+    el.addEventListener('contextmenu',e=>e.preventDefault());
+  };
+  bind('gasPedal',   ()=>driveInput.gas=1,      ()=>driveInput.gas=0);
+  bind('brakePedal', ()=>driveInput.brake=1,    ()=>driveInput.brake=0);
+  bind('steerLeft',  ()=>driveInput.left=true,  ()=>driveInput.left=false);
+  bind('steerRight', ()=>driveInput.right=true, ()=>driveInput.right=false);
+}
+/* Speedometer readout. World units are converted through UNITS_PER_METRE so
+   the number means something to a player — raw units/sec is meaningless. */
+function updateSpeedo(){
+  const el=document.getElementById('speedo'); if(!el) return;
+  const u=USE_CANNON
+    ? Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z)
+    : (carPhys?carPhys.getSpeed():0);
+  el.textContent=Math.round(u/UNITS_PER_METRE*3.6)+' KM/H';
 }
 
 function tick(){
@@ -1461,6 +1530,7 @@ function tick(){
 
   if(controlMode==='drive'){
     driveCar(dt);
+    updateSpeedo();
   } else {
     let moving=false;
     const seek=seekTarget(player.pos, moveTarget, 7.2, dt);
@@ -1557,6 +1627,11 @@ function bindControls(){
   cv.addEventListener('pointercancel',()=>{drag.down=false;});
   window.addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='e') useTarget(); setDriveKey(e.key,true); });
   window.addEventListener('keyup',e=>{ setDriveKey(e.key,false); });
+  bindDriveHud();
+  // a pedal held when the tab is backgrounded never gets its pointerup/keyup,
+  // which would leave the car flooring it on return
+  window.addEventListener('blur',clearDriveInput);
+  document.addEventListener('visibilitychange',()=>{ if(document.hidden) clearDriveInput(); });
   window.addEventListener('resize',()=>{ if(running) resize(); });
   window.addEventListener('orientationchange',()=>{
     // iOS/Android report the new size a beat late — a bare resize() here often
@@ -1634,8 +1709,8 @@ function enterDriveMode(){
   if(!world.car||controlMode==='drive') return;
   controlMode='drive';
   updatePlayerVisibility();
-  moveTarget=null; driveTarget=null; marker.visible=false;
-  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
+  moveTarget=null; marker.visible=false;
+  clearDriveInput();
   // re-seed whichever physics is driving from the car's current (parked or
   // previously-driven) position and rotation, inverting the fixed model
   // offset so the very first driven frame doesn't snap; velocity/steering
@@ -1645,15 +1720,18 @@ function enterDriveMode(){
     chassisBody.position.set(world.car.position.x,world.car.position.y+carRideHeight,world.car.position.z);
     chassisBody.quaternion.setFromEuler(0,yaw,0);
     chassisBody.velocity.set(0,0,0); chassisBody.angularVelocity.set(0,0,0);
-    vehicle.setSteeringValue(0,0); vehicle.setSteeringValue(0,1);
+    vehicle.setSteeringValue(0,0); vehicle.setSteeringValue(0,1); carSteer=0;
   } else {
     carPhys.pos=[world.car.position.x,world.car.position.z];
     carPhys.rot=yaw;
     carPhys.v=[0,0]; carPhys.vrot=0; carPhys.wheelAngle=0;
   }
+  clearDriveInput();
   document.getElementById('prompt').style.display='none';
   document.getElementById('exitVehicleBtn').style.display='block';
-  const hint=document.getElementById('hint'); if(hint) hint.textContent='WASD/ARROWS OR TAP GROUND TO DRIVE · DRAG TO LOOK';
+  const dh=document.getElementById('driveHud'); if(dh) dh.style.display='block';
+  document.getElementById('game').classList.add('driving');
+  const hint=document.getElementById('hint'); if(hint) hint.textContent='GAS + BRAKE TO DRIVE · BRAKE AGAIN TO REVERSE · DRAG TO LOOK';
 }
 function exitDriveMode(){
   if(controlMode!=='drive') return;
@@ -1662,9 +1740,11 @@ function exitDriveMode(){
   player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
   player.yaw=player.targetYaw=world.car.rotation.y-CAR_ROT_OFFSET;
   updatePlayerVisibility();
-  driveTarget=null; marker.visible=false;
-  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
+  marker.visible=false;
+  clearDriveInput();
   document.getElementById('exitVehicleBtn').style.display='none';
+  const dh=document.getElementById('driveHud'); if(dh) dh.style.display='none';
+  document.getElementById('game').classList.remove('driving');
   const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO WALK · TAP THINGS TO USE · DRAG TO LOOK';
 }
 
@@ -1688,9 +1768,9 @@ function backToTitle(){
   running=false; if(raf) cancelAnimationFrame(raf);
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
-  controlMode='walk'; driveTarget=null; carPhys=null;
+  controlMode='walk'; carPhys=null;
   physWorld=null; vehicle=null; chassisBody=null;
-  driveKeys.fwd=driveKeys.back=driveKeys.left=driveKeys.right=false;
+  clearDriveInput();
   clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   if(scene){

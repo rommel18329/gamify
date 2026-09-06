@@ -281,12 +281,60 @@ helpers — `seekTarget(pos, target, speed, dt)` (move a position directly
 toward a point, returns whether it arrived/is moving and the heading to
 face) and `smoothYaw(current, target, rate, dt)` (turn toward a heading at
 a given rate) — a person can strafe/turn independently of their facing
-without looking wrong. `enterDriveMode()`/`exitDriveMode()` (also
-`js/game.js`) swap which transform `handleTap()` sends taps to, hide/show
-`playerGroup`, and toggle the `#exitVehicleBtn` HUD button. `backToTitle()`
-resets `controlMode` back to `'walk'` — don't remove that, or leaving to the
-title screen mid-drive would carry the mode into the next session with the
-player mesh still hidden.
+without looking wrong. **Only walking is tap-to-move**; driving is pedals
+(see Driving controls below), so in drive mode `handleTap()` returns
+immediately and a tap does nothing at all. `enterDriveMode()`/
+`exitDriveMode()` (also `js/game.js`) hide/show `playerGroup`, toggle the
+`#exitVehicleBtn` and `#driveHud` HUD elements, add/remove `#game`'s
+`driving` class, and call `clearDriveInput()`. `backToTitle()` resets
+`controlMode` back to `'walk'` — don't remove that, or leaving to the title
+screen mid-drive would carry the mode into the next session with the player
+mesh still hidden.
+
+### Driving controls (pedals, not taps)
+
+The car is driven with on-screen **GAS / BRAKE / ‹ / ›** buttons
+(`#driveHud` in `index.html`, styling under "driving controls" in
+`css/styles.css`, bound by `bindDriveHud()` in `js/game.js`), modelled on
+mobile driving games like Car Parking Multiplayer. This is the primary
+scheme — the game is played on a phone, so **any control that only exists
+on a keyboard doesn't exist**. WASD/arrows are a desktop convenience that
+writes into the same place.
+
+That "same place" is `driveInput` (`{gas, brake, left, right}`): pedals and
+keyboard both write it, and both `driveCarCannon()` and `driveCarFallback()`
+only ever read it. Adding a third input source (a gamepad, tilt) means
+writing `driveInput` too — never reading raw events inside the physics.
+`gas`/`brake` are `0..1` rather than booleans so an analog source can feed
+them without touching the physics.
+
+Things that will bite if changed:
+
+- **`brake` is one pedal doing two jobs**: it brakes while the car is rolling
+  forward and becomes reverse once forward speed drops below
+  `CAR_CREEP_SPEED`. That decision needs *signed* speed along the car's own
+  heading (`velocity · heading`), not `|velocity|`, which can't tell forward
+  from backward. Both physics paths compute this the same way.
+- **Pointer events, not `click`/`touchstart`** — driving means holding gas
+  *and* a steer button at once, and only pointer events give each finger its
+  own `pointerId`. `bindDriveHud()` calls `setPointerCapture()` on press so a
+  finger sliding off a button mid-corner still delivers its release to that
+  button; without it the pedal sticks down.
+- **`touch-action:none` / `user-select:none` on `.pedal` are load-bearing**,
+  not tidiness. Without them a held button triggers scroll/zoom gestures and
+  the iOS long-press callout, both of which swallow the `pointerup` and leave
+  the car flooring it. `clearDriveInput()` on `blur`/`visibilitychange` covers
+  the same failure when the tab is backgrounded mid-press.
+- The pedals are siblings of the canvas, not children, so pressing one never
+  reaches the canvas tap/drag handlers. Keep it that way rather than adding
+  propagation guards.
+- `syncPedalUI()` is the only thing that sets `.held`, so keyboard driving
+  lights the same buttons a finger would. Set `driveInput` through
+  `setDriveKey()`/`bindDriveHud()`/`clearDriveInput()` rather than assigning
+  fields directly, or the buttons desync from the actual input.
+- `#driveHud` overlaps where `#zoomWrap` normally sits; `#game.driving`
+  lifts the zoom slider clear of the pedals. Anything else added to the
+  bottom corners needs the same treatment.
 
 The car itself is a backdrop-adjacent object, not inside the garage: see
 `CAR_SPOT`/`buildGarage()`'s comment in `js/game.js` for why (the garage is
@@ -298,10 +346,30 @@ once it's driveable.
 
 ### Car physics
 
-Driving does **not** reuse `seekTarget()` — a car moving in a straight line
-directly toward the tapped point regardless of which way it's facing reads
-as crabbing sideways into its own turns, since a vehicle can only actually
-move along its own heading.
+Driving does **not** reuse `seekTarget()` — that helper moves a position
+straight toward a point regardless of facing, which for a car reads as
+crabbing sideways into its own turns, since a vehicle can only actually move
+along its own heading.
+
+The handling constants at the top of `js/game.js` (`CAR_TOP_SPEED`,
+`CAR_MAX_ENGINE_FORCE`, `CAR_BRAKE_FORCE`, `CAR_STEER_LOW`/`_HIGH`/`_RATE`,
+`CAR_ANGULAR_DAMPING`) are **measured, not picked** — see the isolated-Node
+method below. Three of them exist because of specific ways driving felt
+broken:
+
+- **`CAR_TOP_SPEED` is enforced by tapering engine force**
+  (`taper = 1 - frac²`, `frac = speed/CAR_TOP_SPEED`), not by clamping
+  velocity — a hard clamp fights the contact solver and reads as hitting an
+  invisible wall. There is no drag in this world, so without the taper
+  holding gas accelerates forever (measured: still climbing past 21 u/s
+  after 6 seconds).
+- **Max steering lock falls off with speed** (`CAR_STEER_LOW` at a
+  standstill toward `CAR_STEER_HIGH` at top speed). Full lock is what you
+  want for parking and what spins you out at speed.
+- **`carSteer` ramps toward the target at `CAR_STEER_RATE`** rather than
+  snapping to it (and self-centers 1.6x faster than it turns in, like a real
+  rack). `setSteeringValue()` with the full lock every frame was half of why
+  steering felt awful.
 
 **`js/vendor/cannon.js` drives the car** — a real rigid-body chassis on 4
 raycast wheels with actual suspension (`CANNON.RaycastVehicle`), not a
@@ -319,12 +387,9 @@ actual driving feel. MIT licensed either way.
 `buildPhysicsWorld()` builds one static box body per `buildingColliders()`
 entry (see Collision below) plus a ground plane; `buildVehicle()` builds the
 chassis and 4 wheels, sized off `CAR_LENGTH`/`CAR_WIDTH` so they can never
-drift from the visual mesh. `driveCarCannon()` in `js/game.js` feeds it
-`engineForce`/`steer`/`brake` from whichever control is active — WASD/arrow
-keys (`driveKeys`) map directly onto them like a real pedal and wheel;
-tap-to-drive (`driveTarget`) runs a small steering controller that aims for
-the same two inputs — then steps the world and copies the settled chassis
-transform onto `world.car`. `js/carphysics.js` (below) is the fallback if
+drift from the visual mesh. `driveCarCannon()` in `js/game.js` turns
+`driveInput`'s pedals into `engineForce`/`steer`/`brake`, steps the world,
+and copies the settled chassis transform onto `world.car`. `js/carphysics.js` (below) is the fallback if
 `window.CANNON` is ever undefined (`USE_CANNON`, decided once at load) —
 same "a missing asset costs you the good version, never a broken game"
 pattern `models.js` uses for characters — so anything that touches driving
@@ -409,10 +474,9 @@ source of truth for both collision systems in the game:
   player (`PLAYER_RADIUS`, called every frame from `tick()`) and for the
   car whenever `USE_CANNON` is false (`CAR_RADIUS`, called from
   `driveCarFallback()`); a hit cancels the pending `moveTarget`/
-  `driveTarget` (and, for the fallback car, zeroes `carPhys.v`/`.vrot`)
-  rather than leaving the seek/steering logic pushing into the wall every
-  frame, which would otherwise jitter the position back and forth against
-  it.
+  `moveTarget` (and, for the fallback car, zeroes `carPhys.v`/`.vrot`)
+  rather than leaving the seek logic pushing into the wall every frame,
+  which would otherwise jitter the position back and forth against it.
 
 Porch columns, awnings and the domino table are deliberately NOT collidable
 in either system — thin single posts, not walls, and colliding with every
