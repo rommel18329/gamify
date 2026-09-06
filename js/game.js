@@ -8,8 +8,24 @@ let drag={down:false,moved:false,x:0,y:0,t:0,id:null};
 
 /* 'walk' (default) or 'drive' — see enterDriveMode()/exitDriveMode() */
 let controlMode='walk';
-let driveTarget=null, carYaw=0, carTargetYaw=0;
-const CAR_SPEED=14, CAR_TURN_RATE=4;
+let driveTarget=null, carYaw=0, carTargetYaw=0, carSpeed=0;
+/* Arcade car physics — the car accelerates/brakes toward a target speed and
+   steers toward its target heading at a rate that shrinks with speed, the
+   same two building blocks used by every simple "bicycle model" car (see
+   e.g. oseiskar/js-car on GitHub, MIT — a two-axle simplification of the
+   same idea): a real car can pivot tightly standing still but can't snap its
+   heading at speed, and it takes a beat to get up to speed or stop rather
+   than teleporting there. Tapping a point roughly behind the car reverses
+   into it instead of trying to steer a car forward through a U-turn on the
+   spot. Replaces the previous model, where the car moved in a straight line
+   directly toward the tapped point every frame regardless of which way it
+   was facing — visually that read as the car crabbing sideways into its own
+   turns instead of driving into them. */
+const CAR_MAX_SPEED=14, CAR_REVERSE_SPEED=7.5;
+const CAR_ACCEL=16, CAR_BRAKE=24;
+const CAR_TURN_RATE_LOW=3.0, CAR_TURN_RATE_HIGH=1.05;   // rad/s at rest vs at CAR_MAX_SPEED
+const CAR_ARRIVE_DIST=1.0, CAR_REVERSE_ANGLE=2.2;       // radians (~126°) — "target is behind" cutoff
+const PLAYER_RADIUS=0.5, CAR_RADIUS=1.15;
 
 /* 'orbit' (default third-person follow-cam) or 'first' — see toggleCameraMode() */
 let cameraMode='orbit';
@@ -732,6 +748,46 @@ function buildCar(){
   scene.add(world.car);
 }
 
+/* the colmado's world position — a module constant (not a buildWorld() local)
+   so the collision boxes below can reference the exact same numbers buildColmado()
+   and its neighbours (domino table, street lights, wanderers, palms) build from. */
+const COLMADO_POS=new THREE.Vector3(-2,0,24);
+
+/* ---- building collision ----
+   Solid walls that neither the player nor the driven car can pass through.
+   Boxes are axis-aligned in world space, sized from each building's own known
+   footprint (see buildHouse()/buildGarage()/buildColmado()) plus enough extra
+   on the colmado's street-facing side to also block its counter, crates and
+   gas cylinder, which stick out past the wall itself. Porch columns, awnings
+   and the domino table are deliberately left out — thin single posts, not
+   walls, and colliding with every one of them would make walking near the
+   house feel like fighting the geometry. */
+function buildingColliders(){
+  return [
+    {minX:-9.5,maxX:5.5,minZ:-7.5,maxZ:3.5},                                   // house (15x11 @ -2,-2)
+    {minX:5.5,maxX:12.5,minZ:-7.5,maxZ:0.5},                                   // garage (7x8 @ 9,-3.5)
+    {minX:COLMADO_POS.x-5,maxX:COLMADO_POS.x+5,                                // colmado (10x6) + street clutter
+     minZ:COLMADO_POS.z-3,maxZ:COLMADO_POS.z+4.6}
+  ];
+}
+/* Pushes pos out of any collider it has penetrated, along whichever axis needs
+   the smaller correction — the same approach the house-only check used before
+   this was generalized to all three buildings. Returns whether a push happened,
+   so callers can kill a stale move/drive target and (for the car) momentum. */
+function resolveCollisions(pos,radius){
+  let hit=false;
+  buildingColliders().forEach(b=>{
+    const minX=b.minX-radius,maxX=b.maxX+radius,minZ=b.minZ-radius,maxZ=b.maxZ+radius;
+    if(pos.x<=minX||pos.x>=maxX||pos.z<=minZ||pos.z>=maxZ) return;
+    hit=true;
+    const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
+    const inX=Math.min(pos.x-minX,maxX-pos.x), inZ=Math.min(pos.z-minZ,maxZ-pos.z);
+    if(inX<inZ) pos.x=pos.x>cx?maxX:minX;
+    else pos.z=pos.z>cz?maxZ:minZ;
+  });
+  return hit;
+}
+
 /* the board */
 function buildBoard(){
   const board=new THREE.Group();
@@ -754,7 +810,12 @@ function buildFoliage(){
     }
     const a=Math.random()*Math.PI*2, r=20+Math.random()*26;
     t.position.set(Math.cos(a)*r,0,Math.sin(a)*r);
-    const s=.75+Math.random()*.9; t.scale.set(s,s,s);
+    // floor raised well above 1.0: at the old .75-1.65 range the smallest trees
+    // (apex ~4.2-5.95 units unscaled * .75) came out barely taller than the
+    // 4-unit-tall player — a "tree" you could look nearly level with reads as a
+    // shrub, not a tree, next to a person of fixed real height
+    const s=1.3+Math.random()*.7; t.scale.set(s,s,s);
+    t.userData.foliageTree=true;
     scene.add(t);
   }
 }
@@ -797,7 +858,7 @@ function buildWorld(){
   buildGround();
   buildHouse();
   buildGarage();
-  const colPos=new THREE.Vector3(-2,0,24);
+  const colPos=COLMADO_POS;
   buildColmado(colPos);
   buildDominoScene(colPos);
   buildStreetLights(colPos);
@@ -1043,6 +1104,44 @@ function smoothYaw(current, target, rate, dt){
   while(dy>Math.PI) dy-=Math.PI*2; while(dy<-Math.PI) dy+=Math.PI*2;
   return current+dy*Math.min(1,dt*rate);
 }
+function stepToward(v,target,rate,dt){
+  const d=target-v, m=rate*dt;
+  return Math.abs(d)<=m ? target : v+Math.sign(d)*m;
+}
+
+/* Drives world.car one physics step toward driveTarget. Moves it forward (or
+   backward) along its OWN heading rather than straight at the target — see
+   the constants block above for why. */
+function driveCar(dt){
+  if(!driveTarget){
+    carSpeed=stepToward(carSpeed,0,CAR_BRAKE,dt);
+  } else {
+    const dx=driveTarget.x-world.car.position.x, dz=driveTarget.z-world.car.position.z;
+    const dist=Math.hypot(dx,dz);
+    if(dist<=CAR_ARRIVE_DIST){
+      driveTarget=null; marker.visible=false; carSpeed=stepToward(carSpeed,0,CAR_BRAKE,dt);
+    } else {
+      const toTarget=Math.atan2(dx,dz);
+      let err=toTarget-carYaw; while(err>Math.PI) err-=Math.PI*2; while(err<-Math.PI) err+=Math.PI*2;
+      const reversing=Math.abs(err)>CAR_REVERSE_ANGLE && dist>CAR_ARRIVE_DIST*2;
+      carTargetYaw=reversing ? toTarget+Math.PI : toTarget;
+      const stopDist=(carSpeed*carSpeed)/(2*CAR_BRAKE)+0.6;
+      const desired=dist<=stopDist ? 0 : (reversing?-CAR_REVERSE_SPEED:CAR_MAX_SPEED);
+      carSpeed=stepToward(carSpeed,desired,desired===0?CAR_BRAKE:CAR_ACCEL,dt);
+    }
+  }
+  // steering authority shrinks with speed — quick to pivot near-stopped, wide
+  // arcs at speed, same as a real car's minimum turning radius
+  const speedFrac=Math.min(1,Math.abs(carSpeed)/CAR_MAX_SPEED);
+  const turnRate=CAR_TURN_RATE_LOW-(CAR_TURN_RATE_LOW-CAR_TURN_RATE_HIGH)*speedFrac;
+  carYaw=smoothYaw(carYaw,carTargetYaw,turnRate,dt);
+  world.car.position.x+=Math.sin(carYaw)*carSpeed*dt;
+  world.car.position.z+=Math.cos(carYaw)*carSpeed*dt;
+  if(resolveCollisions(world.car.position,CAR_RADIUS)){
+    carSpeed=0; driveTarget=null; marker.visible=false;
+  }
+  world.car.rotation.y=carYaw+CAR_ROT_OFFSET;
+}
 
 function tick(){
   if(!running) return;
@@ -1050,11 +1149,7 @@ function tick(){
   const dt=Math.min(clock.getDelta(),.05);
 
   if(controlMode==='drive'){
-    const seek=seekTarget(world.car.position, driveTarget, CAR_SPEED, dt);
-    if(seek.arrived){ driveTarget=null; marker.visible=false; }
-    else if(seek.moving) carTargetYaw=seek.targetYaw;
-    carYaw=smoothYaw(carYaw, carTargetYaw, CAR_TURN_RATE, dt);
-    world.car.rotation.y=carYaw+CAR_ROT_OFFSET;
+    driveCar(dt);
   } else {
     let moving=false;
     const seek=seekTarget(player.pos, moveTarget, 7.2, dt);
@@ -1062,12 +1157,7 @@ function tick(){
     else if(seek.moving){ moving=true; player.targetYaw=seek.targetYaw; player.walkT+=dt*9.5; }
     player.yaw=smoothYaw(player.yaw, player.targetYaw, 11, dt);
 
-    if(Math.abs(player.pos.x+2)<8.1&&Math.abs(player.pos.z+2)<6.1){
-      const px=player.pos.x+2, pz=player.pos.z+2;
-      if(Math.abs(px)/8.1>Math.abs(pz)/6.1) player.pos.x=(px>0?8.1:-8.1)-2;
-      else player.pos.z=(pz>0?6.1:-6.1)-2;
-      moveTarget=null; marker.visible=false;
-    }
+    if(resolveCollisions(player.pos,PLAYER_RADIUS)){ moveTarget=null; marker.visible=false; }
 
     playerGroup.position.set(player.pos.x,0,player.pos.z);
     playerGroup.rotation.y=player.yaw;
@@ -1235,7 +1325,7 @@ function enterDriveMode(){
   moveTarget=null; driveTarget=null; marker.visible=false;
   // seed carYaw from the car's current (parked or previously-driven) rotation,
   // inverting the fixed model offset so the very first driven frame doesn't snap
-  carYaw=carTargetYaw=world.car.rotation.y-CAR_ROT_OFFSET;
+  carYaw=carTargetYaw=world.car.rotation.y-CAR_ROT_OFFSET; carSpeed=0;
   document.getElementById('prompt').style.display='none';
   document.getElementById('exitVehicleBtn').style.display='block';
   const hint=document.getElementById('hint'); if(hint) hint.textContent='TAP GROUND TO DRIVE · DRAG TO LOOK';
@@ -1272,7 +1362,7 @@ function backToTitle(){
   running=false; if(raf) cancelAnimationFrame(raf);
   document.getElementById('game').style.display='none';
   intruders=[]; world={}; moveTarget=null; pendingSpot=null;
-  controlMode='walk'; driveTarget=null;
+  controlMode='walk'; driveTarget=null; carSpeed=0;
   clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   if(scene){
