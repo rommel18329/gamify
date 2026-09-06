@@ -92,12 +92,50 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
   text-align:center;font-size:10px;color:rgba(233,231,218,.45);pointer-events:none;z-index:10;
   text-shadow:0 1px 3px rgba(0,0,0,.9);}
 
+/* ---- driving controls (pedal scheme, shown only in drive mode) ----
+   touch-action:none and user-select:none are load-bearing, not tidiness: on a
+   phone a held button otherwise triggers scroll/zoom gestures and the iOS
+   text-selection callout, both of which swallow the pointerup and leave the
+   pedal stuck down. The buttons sit above the canvas but are NOT children of
+   it, so pressing one never reaches the canvas tap/drag handlers. */
+#driveHud{position:absolute;inset:0;z-index:12;pointer-events:none;}
+#driveHud .dpad{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);
+  display:flex;gap:12px;pointer-events:auto;}
+#driveHud .dpad.left{left:calc(env(safe-area-inset-left,0px) + 16px);}
+#driveHud .dpad.right{right:calc(env(safe-area-inset-right,0px) + 16px);}
+.pedal{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:inherit;font-weight:700;letter-spacing:.06em;color:var(--paper);
+  border:2px solid rgba(233,231,218,.32);border-radius:18px;
+  background:rgba(10,13,20,.62);backdrop-filter:blur(6px);
+  box-shadow:0 4px 0 rgba(0,0,0,.5);
+  touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;
+  transition:transform .06s,box-shadow .06s,background .12s;}
+.pedal small{font-size:8px;font-weight:400;opacity:.5;letter-spacing:.08em;margin-top:2px;}
+.pedal.steer{width:72px;height:72px;font-size:32px;line-height:1;padding-bottom:4px;}
+.pedal.gas{width:88px;height:88px;font-size:14px;
+  border-color:rgba(126,168,94,.6);color:var(--moss);}
+.pedal.brake{width:72px;height:72px;font-size:12px;
+  border-color:rgba(198,92,74,.55);color:#e0866f;}
+/* .held is set by syncPedalUI(), so keyboard driving lights the same buttons */
+.pedal.held{transform:translateY(4px);box-shadow:0 0 0 rgba(0,0,0,.5);}
+.pedal.gas.held{background:rgba(126,168,94,.34);}
+.pedal.brake.held{background:rgba(198,92,74,.34);}
+.pedal.steer.held{background:rgba(233,231,218,.2);}
+#speedo{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 52px);left:0;right:0;
+  text-align:center;font-size:20px;font-weight:700;letter-spacing:.1em;
+  color:var(--paper);opacity:.85;pointer-events:none;
+  font-variant-numeric:tabular-nums;text-shadow:0 2px 6px rgba(0,0,0,.9);}
+@media (max-height:430px){
+  .pedal.gas{width:76px;height:76px;} .pedal.brake,.pedal.steer{width:64px;height:64px;}
+}
+
 /* zoom slider — third-person only, drag to pull the camera out for a wider,
    more overhead "sim" framing; hidden in first-person where camDist is unused */
 #zoomWrap{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 44px);right:12px;
   display:flex;align-items:center;gap:6px;z-index:10;
   background:rgba(10,13,20,.6);border:1.5px solid rgba(233,231,218,.18);border-radius:20px;
   padding:5px 10px;backdrop-filter:blur(6px);}
+#game.driving #zoomWrap{bottom:calc(env(safe-area-inset-bottom,0px) + 122px);}
 #zoomWrap span{font-size:12px;}
 #zoomSlider{width:100px;accent-color:var(--moss);}
 
