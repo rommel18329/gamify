@@ -292,30 +292,37 @@ function makeCar(){
   const len=isTruck?5.6:isSUV?5.0:isCoupe?4.4:4.7;
   const hgt=isSUV?1.15:isTruck?1.20:isCoupe?.80:.95;
   const lo=mods.tune>=2?-.12:0;
-  const body=M(new THREE.BoxGeometry(len,hgt,2.05),paint,{inkT:.022});
+  // Built nose-along-+Z, matching BOTH the loaded car model (its Headlights
+  // material sits at z=+1.99, its TailLights at z=-1.88) and the cannon.js
+  // chassis (a Box of CAR_LENGTH/2 along z). All three share one convention so
+  // no rotation offset is needed anywhere — see the note above CAR_SPOT.
+  const body=M(new THREE.BoxGeometry(2.05,hgt,len),paint,{inkT:.022});
   body.position.y=.86+hgt/2+lo; g.add(body);
   const nose=M(new THREE.SphereGeometry(1.05,18,14),paint,{ink:false});
-  nose.scale.set(.30,hgt/2.1,.98); nose.position.set(len/2,.86+hgt/2+lo,0); g.add(nose);
-  const tail=nose.clone(); tail.position.x=-len/2; g.add(tail);
+  nose.scale.set(.98,hgt/2.1,.30); nose.position.set(0,.86+hgt/2+lo,len/2); g.add(nose);
+  const tail=nose.clone(); tail.position.z=-len/2; g.add(tail);
   const glass=mods.tint>=1?0x090C10:0x35566B;
   const cabW=isTruck?2.1:len*.52;
   const cab=M(new THREE.SphereGeometry(1,20,14),glass,{inkT:.03,rimPow:1.5,rim:0xBBDDFF});
-  cab.scale.set(cabW/2,.46,.92); cab.position.set(isTruck?.4:0,.86+hgt+.30+lo,0); g.add(cab);
-  if(isTruck){ const bed=M(new THREE.BoxGeometry(2.3,.5,1.95),paint,{inkT:.026});
-    bed.position.set(-1.6,.86+hgt/2+.28+lo,0); g.add(bed); }
+  cab.scale.set(.92,.46,cabW/2); cab.position.set(0,.86+hgt+.30+lo,isTruck?.4:0); g.add(cab);
+  if(isTruck){ const bed=M(new THREE.BoxGeometry(1.95,.5,2.3),paint,{inkT:.026});
+    bed.position.set(0,.86+hgt/2+.28+lo,-1.6); g.add(bed); }
   const rimCol=mods.wheels>=2?0xE9E7DA:mods.wheels>=1?0x9CA0AC:0x585D55;
   const wr=mods.wheels>=2?.50:.45;
-  [len/2-.95,-(len/2-.95)].forEach(x=>{
-    [1.02,-1.02].forEach(z=>{
+  // wheels sit on the left/right flanks (x) and along the wheelbase (z), so
+  // every axle points along X: a torus's hole axis is +Z by default, a
+  // cylinder's is +Y, hence the two different rotations to reach the same axis
+  [len/2-.95,-(len/2-.95)].forEach(z=>{
+    [1.02,-1.02].forEach(x=>{
       const tyre=M(new THREE.TorusGeometry(wr*.78,wr*.30,10,18),0x13161A,{inkT:.05});
       tyre.rotation.y=Math.PI/2; tyre.position.set(x,wr+lo,z); g.add(tyre);
       const rim=M(new THREE.CylinderGeometry(wr*.55,wr*.55,.30,14),rimCol,{inkT:.05});
-      rim.rotation.x=Math.PI/2; rim.position.set(x,wr+lo,z); g.add(rim);
+      rim.rotation.z=Math.PI/2; rim.position.set(x,wr+lo,z); g.add(rim);
     });
   });
-  [.66,-.66].forEach(z=>{
+  [.66,-.66].forEach(x=>{
     const hl=new THREE.Mesh(new THREE.SphereGeometry(.17,12,10),new THREE.MeshBasicMaterial({color:0xFFF6D0}));
-    hl.scale.set(.4,.7,1); hl.position.set(len/2+.06,1.05+lo,z); g.add(hl);
+    hl.scale.set(1,.7,.4); hl.position.set(x,1.05+lo,len/2+.06); g.add(hl);
   });
   g.scale.setScalar(CAR_LENGTH/4.7);   // every dimension above was tuned against a 4.7-unit default tier
   return g;
@@ -857,14 +864,22 @@ function buildSecurityProps(){
    over a dozen units, which is really a contact solver violently correcting
    a spawn-time interpenetration. z=7 clears the garage's z<=0.5 edge with
    real margin (rear bumper at 7-4.8=2.2). Found by tracing exactly that. */
-const CAR_SPOT=new THREE.Vector3(HOME_X+11,0,7), CAR_ROT_OFFSET=Math.PI/2;
+/* There is deliberately NO car rotation offset. The loaded car model, the
+   primitive makeCar() fallback and the cannon.js chassis are all built
+   nose-along-+Z, which is also the game's forward at yaw 0 ((sin y, cos y)),
+   so world.car.rotation.y IS the physics yaw. A CAR_ROT_OFFSET of PI/2 used
+   to sit here and rotated the car a quarter turn off its direction of travel
+   — the car visibly drove sideways. Verified from the asset itself: the OBJ's
+   Headlights material centroids at z=+1.99, TailLights at z=-1.88. If you
+   ever swap the car model, measure it the same way rather than adding an
+   offset back. */
+const CAR_SPOT=new THREE.Vector3(HOME_X+11,0,7);
 function buildCar(){
   world.car=modelCar(S.vehicle.paint)||makeCar();
-  world.car.position.copy(CAR_SPOT); world.car.rotation.y=CAR_ROT_OFFSET;
+  world.car.position.copy(CAR_SPOT); world.car.rotation.y=0;
   scene.add(world.car);
   // the fallback physics is always built, cheap and ready, even when cannon.js
-  // is driving — carPhys.rot uses the SAME convention as
-  // world.car.rotation.y-CAR_ROT_OFFSET (see carphysics.js's header)
+  // is driving — carPhys.rot uses the SAME convention as world.car.rotation.y
   carPhys=new CarPhysics({length:CAR_LENGTH,width:CAR_WIDTH});
   carPhys.pos=[CAR_SPOT.x,CAR_SPOT.z]; carPhys.rot=0;
 }
@@ -1192,55 +1207,249 @@ function updateWanderers(dt){
   });
 }
 
-/* ---- ambient audio: procedural, generic beat — not copyrighted material,
-   just a low rhythmic loop that fades in near the colmado ---- */
-let audioCtx=null, audioMuted=false, audioStarted=false, ambientGain=null;
+/* ---- audio ----------------------------------------------------------------
+   Everything here is SYNTHESIZED at runtime with the Web Audio API — there is
+   not a single audio file in this repo, on purpose, for the same two reasons
+   detailMap() paints its textures on a canvas instead of downloading them:
+
+   1. Licensing. Real merengue/bachata/dembow recordings are somebody's
+      copyright, and shipping them (or hotlinking them) in an app is
+      infringement no matter how short the clip. Rhythm itself is not
+      copyrightable, so the loops below play the actual PATTERNS you'd hear
+      out of a colmado speaker — merengue's tambora and 2/4 güira, bachata's
+      bongo/guira shuffle with a bass tumbao, dembow's boom-ch-boom-chick —
+      without reproducing anyone's recording.
+   2. It cannot fail to load. No download, no decode, no 5MB of assets, works
+      offline and inside the single-file build.
+
+   If you ever want the real thing, the hook is deliberate: drop licensed
+   files in and give MUSIC[] entries a `src`, then have startTrack() play a
+   decoded buffer instead of calling its pattern function. Don't remove the
+   synth path — it's the fallback, same as makePerson() is for the models.
+
+   Two independent buses hang off masterGain:
+     musicGain   — the colmado's speaker, fades with distance from it
+     engineGain  — the car, only alive while driving
+   ------------------------------------------------------------------------- */
+let audioCtx=null, audioMuted=false, audioStarted=false;
+let masterGain=null, musicGain=null, engineGain=null;
+let musicTimer=null, musicTrack=0;
+
 function initAudio(){
   if(audioCtx) return;
   try{
     audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-    ambientGain=audioCtx.createGain(); ambientGain.gain.value=0;
-    ambientGain.connect(audioCtx.destination);
-    scheduleBeatLoop();
+    masterGain=audioCtx.createGain(); masterGain.gain.value=1; masterGain.connect(audioCtx.destination);
+    musicGain=audioCtx.createGain();  musicGain.gain.value=0;  musicGain.connect(masterGain);
+    engineGain=audioCtx.createGain(); engineGain.gain.value=0; engineGain.connect(masterGain);
+    musicTrack=Math.floor(Math.random()*MUSIC.length);
+    scheduleMusic();
+    buildEngineVoice();
     audioStarted=true;
-  }catch(e){ /* audio not available — fine, silent world */ }
+  }catch(e){ /* no audio available — fine, the world just runs silent */ }
 }
-function scheduleBeatLoop(){
+
+/* ---- small synth voices, all reused by the pattern functions below ---- */
+// short noise burst shaped by a filter: güira, maraca, hi-hat, tyre scrub
+function noiseHit(t,dur,freq,q,vol,dest,type){
   if(!audioCtx) return;
-  const bpm=96, beatLen=60/bpm;
-  let t=audioCtx.currentTime+0.1;
-  function bar(){
-    for(let i=0;i<4;i++){
-      const kt=t+i*beatLen;
-      // kick
-      const osc=audioCtx.createOscillator(), g=audioCtx.createGain();
-      osc.type='sine'; osc.frequency.setValueAtTime(120,kt); osc.frequency.exponentialRampToValueAtTime(38,kt+0.14);
-      g.gain.setValueAtTime(0.9,kt); g.gain.exponentialRampToValueAtTime(0.001,kt+0.16);
-      osc.connect(g); g.connect(ambientGain); osc.start(kt); osc.stop(kt+0.18);
-      // off-beat conga-ish tick
-      if(i%2===1){
-        const t2=kt+beatLen*0.5;
-        const osc2=audioCtx.createOscillator(), g2=audioCtx.createGain();
-        osc2.type='triangle'; osc2.frequency.setValueAtTime(320,t2);
-        g2.gain.setValueAtTime(0.35,t2); g2.gain.exponentialRampToValueAtTime(0.001,t2+0.09);
-        osc2.connect(g2); g2.connect(ambientGain); osc2.start(t2); osc2.stop(t2+0.1);
-      }
-    }
-    t+=beatLen*4;
-    if(audioCtx.state!=='closed') setTimeout(bar, beatLen*4*1000*0.9);
-  }
-  bar();
+  const n=Math.max(1,Math.floor(audioCtx.sampleRate*dur));
+  const buf=audioCtx.createBuffer(1,n,audioCtx.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+  const src=audioCtx.createBufferSource(); src.buffer=buf;
+  const f=audioCtx.createBiquadFilter(); f.type=type||'bandpass';
+  f.frequency.value=freq; f.Q.value=q;
+  const g=audioCtx.createGain();
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  src.connect(f); f.connect(g); g.connect(dest);
+  src.start(t); src.stop(t+dur);
 }
+// pitched drum: tambora head, bongo, conga, kick
+function drumHit(t,f0,f1,dur,vol,dest,type){
+  if(!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type=type||'sine';
+  o.frequency.setValueAtTime(f0,t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+0.02);
+}
+// plucked bass / guitar note
+function pluck(t,freq,dur,vol,dest,type){
+  if(!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain(), f=audioCtx.createBiquadFilter();
+  o.type=type||'triangle'; o.frequency.setValueAtTime(freq,t);
+  f.type='lowpass'; f.frequency.setValueAtTime(freq*7,t);
+  f.frequency.exponentialRampToValueAtTime(Math.max(200,freq*2),t+dur);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(f); f.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+0.02);
+}
+
+/* ---- the three rhythms, as played out of a colmado speaker ----
+   Each writes one bar starting at time t and returns the bar length, so
+   scheduleMusic() can chain them without knowing anything about the style. */
+const NOTE=n=>55*Math.pow(2,n/12);   // n = semitones above A1
+
+function merengue(t,bar){
+  // 2/4, fast. Tambora on the beat with the signature pickup, güira
+  // straight-eighths on top, bass on 1 and the "and" of 2.
+  const b=bar/4, G=musicGain;
+  for(let i=0;i<4;i++){
+    const k=t+i*b;
+    drumHit(k,150,52,0.17,0.85,G);                       // tambora low
+    noiseHit(k+b*0.5,0.055,5200,0.7,0.16,G,'highpass');  // güira
+    noiseHit(k,0.045,4200,0.7,0.11,G,'highpass');
+    if(i%2===1) drumHit(k+b*0.75,320,190,0.09,0.42,G,'triangle');  // tambora rim pickup
+  }
+  const root=NOTE(3);                                    // C
+  [[0,root],[1.5,root*1.5],[2,root],[3.5,root*1.335]].forEach(([i,f])=>
+    pluck(t+i*b,f/2,0.20,0.30,G,'sine'));
+}
+function bachata(t,bar){
+  // 4/4 with the lift on beat 4. Bongo/güira shuffle, walking bass, and the
+  // arpeggiated requinto figure that makes bachata instantly recognisable.
+  const b=bar/4, G=musicGain;
+  for(let i=0;i<4;i++){
+    const k=t+i*b;
+    drumHit(k,110,46,0.15,0.62,G);
+    noiseHit(k+b*0.5,0.05,6000,0.8,0.13,G,'highpass');
+    if(i===3){ noiseHit(k+b*0.5,0.09,3000,0.6,0.30,G,'bandpass');   // the beat-4 lift
+               drumHit(k+b*0.75,420,240,0.08,0.35,G,'triangle'); }
+  }
+  const root=NOTE(-2);                                   // G
+  [0,1,2,3].forEach(i=>pluck(t+i*b,root/2,0.26,0.28,G,'sine'));
+  [0,3,5,7,5,3].forEach((semi,i)=>                       // requinto arpeggio
+    pluck(t+i*(bar/6),root*4*Math.pow(2,semi/12),0.16,0.11,G,'sawtooth'));
+}
+function dembow(t,bar){
+  // the boom-ch-boom-chick that every colmado plays after dark
+  const b=bar/8, G=musicGain;
+  [0,3,4,7].forEach(i=>drumHit(t+i*b,120,40,0.16,0.9,G));
+  [2,6].forEach(i=>noiseHit(t+i*b,0.10,2400,0.9,0.34,G,'bandpass'));
+  for(let i=0;i<8;i++) noiseHit(t+i*b,0.035,7000,0.8,0.07,G,'highpass');
+  const root=NOTE(1);
+  [0,4].forEach(i=>pluck(t+i*b,root/2,0.22,0.34,G,'square'));
+}
+const MUSIC=[
+  {name:'merengue', bpm:132, beats:4, play:merengue},
+  {name:'bachata',  bpm:124, beats:4, play:bachata},
+  {name:'dembow',   bpm:96,  beats:4, play:dembow}
+];
+
+/* Schedules one bar at a time and re-arms itself. Tracks change every 8 bars
+   so standing outside the colmado cycles through the styles rather than
+   looping one four-bar phrase forever. */
+function scheduleMusic(){
+  if(!audioCtx) return;
+  let t=audioCtx.currentTime+0.15, bars=0;
+  function nextBar(){
+    if(!audioCtx||audioCtx.state==='closed') return;
+    const tr=MUSIC[musicTrack], bar=60/tr.bpm*tr.beats;
+    // only actually synthesize when it would be audible — a muted or far-away
+    // speaker shouldn't be building oscillators every bar
+    if(!audioMuted&&musicGain.gain.value>0.004) tr.play(t,bar);
+    t+=bar;
+    if(++bars>=8){ bars=0; musicTrack=(musicTrack+1)%MUSIC.length; }
+    musicTimer=setTimeout(nextBar, Math.max(30,(t-audioCtx.currentTime-0.12)*1000));
+  }
+  nextBar();
+}
+
+/* ---- street ambience: a rooster, a distant dog, a motoconcho horn ----
+   Fired at random from tick() so the barrio isn't silent between bars. */
+let nextAmbient=0;
+function streetAmbience(now){
+  if(!audioStarted||audioMuted||now<nextAmbient) return;
+  nextAmbient=now+9+Math.random()*16;
+  if(!musicGain||musicGain.gain.value<0.002) return;   // too far from anything
+  const t=audioCtx.currentTime, pick=Math.random();
+  const g=audioCtx.createGain(); g.gain.value=0.30; g.connect(musicGain);
+  if(pick<0.34){
+    // motoconcho: a small two-stroke buzzing past
+    const o=audioCtx.createOscillator(), gg=audioCtx.createGain();
+    o.type='sawtooth';
+    o.frequency.setValueAtTime(60,t); o.frequency.linearRampToValueAtTime(150,t+0.9);
+    o.frequency.linearRampToValueAtTime(70,t+2.2);
+    gg.gain.setValueAtTime(0.0001,t); gg.gain.linearRampToValueAtTime(0.12,t+0.7);
+    gg.gain.linearRampToValueAtTime(0.0001,t+2.3);
+    o.connect(gg); gg.connect(g); o.start(t); o.stop(t+2.4);
+  } else if(pick<0.67){
+    // dog, a few streets over
+    for(let i=0;i<2+Math.floor(Math.random()*2);i++)
+      drumHit(t+i*0.34,300+Math.random()*90,140,0.16,0.22,g,'sawtooth');
+  } else {
+    // rooster — they do not wait for morning here
+    const k=t;
+    pluck(k,520,0.20,0.16,g,'sawtooth');
+    pluck(k+0.2,660,0.34,0.14,g,'sawtooth');
+    pluck(k+0.5,430,0.42,0.10,g,'sawtooth');
+  }
+}
+
+/* ---- car engine ----
+   Three detuned sawtooths an octave apart through a lowpass, all running
+   continuously from the moment audio starts; "revving" is just moving their
+   frequency and the filter cutoff. Starting/stopping oscillators per frame
+   would click, and Web Audio nodes are one-shot — you cannot restart a stopped
+   one — so they idle at zero gain instead. */
+let engOsc=[], engFilter=null, engineOn=false;
+function buildEngineVoice(){
+  if(!audioCtx) return;
+  engFilter=audioCtx.createBiquadFilter();
+  engFilter.type='lowpass'; engFilter.frequency.value=700; engFilter.Q.value=3;
+  engFilter.connect(engineGain);
+  [1,2,3.02].forEach((mult,i)=>{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type=i===2?'square':'sawtooth';
+    o.frequency.value=42*mult;
+    g.gain.value=[0.5,0.28,0.12][i];
+    o.connect(g); g.connect(engFilter); o.start();
+    engOsc.push({osc:o,mult:mult});
+  });
+}
+/* Called every frame while driving. Engine note tracks speed the way a real
+   one tracks RPM, and because there are no gears it just climbs — so it's
+   deliberately capped, or it turns into a siren at top speed. */
+function updateEngineAudio(speed,throttle,braking){
+  if(!audioStarted||!engineGain) return;
+  const t=audioCtx.currentTime;
+  const frac=Math.min(1,speed/CAR_TOP_SPEED);
+  const rpm=0.22+frac*0.78+throttle*0.16;            // idle floor + road speed + a little load
+  engOsc.forEach(e=>e.osc.frequency.setTargetAtTime(42*e.mult*(0.75+rpm*1.5),t,0.08));
+  engFilter.frequency.setTargetAtTime(400+rpm*1900+throttle*600,t,0.09);
+  const vol=audioMuted?0:(0.09+throttle*0.10+frac*0.06);
+  engineGain.gain.setTargetAtTime(vol,t,0.10);
+  // tyre scrub when the brakes are hard on and the car is still rolling
+  if(braking&&speed>4&&Math.random()<0.30)
+    noiseHit(t,0.13,1500+Math.random()*900,1.2,0.10,masterGain,'bandpass');
+}
+function startEngineAudio(){
+  if(!audioStarted) initAudio();
+  if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();
+  engineOn=true;
+}
+function stopEngineAudio(){
+  engineOn=false;
+  if(engineGain&&audioCtx) engineGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.18);
+}
+
+/* The colmado's speaker gets louder as you approach it — and audibly louder
+   from inside the car, since you're closer to the street than the yard. */
 function updateAmbientAudio(pos){
-  if(!world.colmado||!audioStarted||!ambientGain) return;
+  if(!world.colmado||!audioStarted||!musicGain) return;
   const d=Math.hypot(world.colmado.position.x-pos.x, world.colmado.position.z+7-pos.z);
-  const target=audioMuted?0:Math.max(0, Math.min(0.5, 1-(d/26)));
-  ambientGain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.4);
+  const target=audioMuted?0:Math.max(0, Math.min(0.5, 1-(d/30)));
+  musicGain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.4);
+  streetAmbience(performance.now()/1000);
 }
 function toggleMute(){
   if(!audioStarted) initAudio();
   audioMuted=!audioMuted;
   document.getElementById('muteBtn').textContent=audioMuted?'🔇':'🔊';
+  if(audioMuted&&engineGain) engineGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.1);
   if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();
 }
 
@@ -1419,7 +1628,7 @@ function driveCarCannon(dt){
   physWorld.step(dt);
 
   world.car.position.set(chassisBody.position.x,chassisBody.position.y-carRideHeight,chassisBody.position.z);
-  world.car.rotation.y=yaw+CAR_ROT_OFFSET;
+  world.car.rotation.y=yaw;
 }
 
 /* The from-scratch CarPhysics port (js/carphysics.js) — used only when
@@ -1455,7 +1664,7 @@ function driveCarFallback(dt){
   }
   carPhys.pos=[p.x,p.z];
   world.car.position.set(p.x,0,p.z);
-  world.car.rotation.y=carPhys.rot+CAR_ROT_OFFSET;
+  world.car.rotation.y=carPhys.rot;
 }
 const tmpVec3=new THREE.Vector3();
 /* Maps WASD and the arrow keys onto driveInput — read every frame by driveCar()
@@ -1515,12 +1724,14 @@ function bindDriveHud(){
 }
 /* Speedometer readout. World units are converted through UNITS_PER_METRE so
    the number means something to a player — raw units/sec is meaningless. */
+/* current speed in world units/sec, from whichever physics is driving */
+function carSpeedNow(){
+  if(USE_CANNON) return chassisBody?Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z):0;
+  return carPhys?carPhys.getSpeed():0;
+}
 function updateSpeedo(){
   const el=document.getElementById('speedo'); if(!el) return;
-  const u=USE_CANNON
-    ? Math.hypot(chassisBody.velocity.x,chassisBody.velocity.z)
-    : (carPhys?carPhys.getSpeed():0);
-  el.textContent=Math.round(u/UNITS_PER_METRE*3.6)+' KM/H';
+  el.textContent=Math.round(carSpeedNow()/UNITS_PER_METRE*3.6)+' KM/H';
 }
 
 function tick(){
@@ -1531,6 +1742,7 @@ function tick(){
   if(controlMode==='drive'){
     driveCar(dt);
     updateSpeedo();
+    updateEngineAudio(carSpeedNow(), driveInput.gas, !!driveInput.brake);
   } else {
     let moving=false;
     const seek=seekTarget(player.pos, moveTarget, 7.2, dt);
@@ -1715,7 +1927,7 @@ function enterDriveMode(){
   // previously-driven) position and rotation, inverting the fixed model
   // offset so the very first driven frame doesn't snap; velocity/steering
   // reset so a stale drive never carries momentum into a fresh one
-  const yaw=world.car.rotation.y-CAR_ROT_OFFSET;
+  const yaw=world.car.rotation.y;
   if(USE_CANNON){
     chassisBody.position.set(world.car.position.x,world.car.position.y+carRideHeight,world.car.position.z);
     chassisBody.quaternion.setFromEuler(0,yaw,0);
@@ -1727,6 +1939,7 @@ function enterDriveMode(){
     carPhys.v=[0,0]; carPhys.vrot=0; carPhys.wheelAngle=0;
   }
   clearDriveInput();
+  startEngineAudio();
   document.getElementById('prompt').style.display='none';
   document.getElementById('exitVehicleBtn').style.display='block';
   const dh=document.getElementById('driveHud'); if(dh) dh.style.display='block';
@@ -1738,10 +1951,11 @@ function exitDriveMode(){
   controlMode='walk';
   // step out beside the car rather than reappearing on top of it
   player.pos.set(world.car.position.x+2.2, 0, world.car.position.z);
-  player.yaw=player.targetYaw=world.car.rotation.y-CAR_ROT_OFFSET;
+  player.yaw=player.targetYaw=world.car.rotation.y;
   updatePlayerVisibility();
   marker.visible=false;
   clearDriveInput();
+  stopEngineAudio();
   document.getElementById('exitVehicleBtn').style.display='none';
   const dh=document.getElementById('driveHud'); if(dh) dh.style.display='none';
   document.getElementById('game').classList.remove('driving');
@@ -1771,8 +1985,12 @@ function backToTitle(){
   controlMode='walk'; carPhys=null;
   physWorld=null; vehicle=null; chassisBody=null;
   clearDriveInput();
+  stopEngineAudio();   // leaving mid-drive must not carry the engine into the title screen
+  if(musicGain&&audioCtx) musicGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.2);
   clearAnimated();
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
+  const dhb=document.getElementById('driveHud'); if(dhb) dhb.style.display='none';
+  document.getElementById('game').classList.remove('driving');
   if(scene){
     // Dispose on exit or repeated title<->world trips leak GPU memory. Two things
     // to be careful about now that loaded models are in the scene:

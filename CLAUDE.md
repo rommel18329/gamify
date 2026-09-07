@@ -445,6 +445,24 @@ do this again before retuning any of the constants below):
   step of that size, no accumulator), matching what the isolated tuning
   script used throughout.
 
+**All three car representations face +Z**, and there is deliberately no
+rotation offset anywhere. The game's forward at yaw 0 is `(sin y, cos y)` =
++Z; the cannon.js chassis is a `Box` of `CAR_LENGTH/2` along z; the loaded
+OBJ's own `Headlights` material sits at z=+1.99 and `TailLights` at z=-1.88;
+and `makeCar()` builds its body, cab, wheelbase and headlights along z to
+match. A `CAR_ROT_OFFSET` of `PI/2` used to sit on `world.car.rotation.y`
+and turned the mesh a quarter-turn off its direction of travel — the car
+visibly drove sideways, "the side of the car is the front". One global
+offset could never have been right anyway, since `makeCar()` was built
+nose-along-+X while the loaded model was +Z, so the two needed *different*
+offsets. If you swap the car model, measure which way it faces (grep its
+`.obj`/`.mtl` for the headlight material and check the sign of those
+vertices' z) and rebuild it to +Z rather than adding an offset back.
+Fixing this also caught a latent bug in `makeCar()`'s fallback wheels: a
+`TorusGeometry`'s hole axis is +Z and a `CylinderGeometry`'s is +Y, so the
+tyre and its rim need *different* rotations to point the same way — they
+were perpendicular to each other before.
+
 `CAR_LENGTH` (`js/game.js`) is still the one source of truth for the car's
 size — `modelCar()` (`js/models.js`), the primitive fallback `makeCar()`,
 *and* the cannon.js chassis in `buildVehicle()` all scale to it, and
@@ -560,6 +578,54 @@ you move any of the three, re-check all three still clear each other.
 Moving the colmado further from spawn is always safe for the
 camera-clipping concern in Camera above (it only widens that margin);
 moving it *closer* is the direction that needs re-verifying.
+
+## Audio
+
+**Every sound in the game is synthesized at runtime with the Web Audio API.
+There is not one audio file in this repo, on purpose** — the same reasoning
+that makes `detailMap()` paint its textures onto a canvas instead of
+downloading them:
+
+- **Licensing.** Real merengue/bachata/dembow recordings are somebody's
+  copyright, and shipping or hotlinking them would be infringement however
+  short the clip. Rhythms and chord patterns are not copyrightable, so
+  `merengue()`/`bachata()`/`dembow()` in `js/game.js` play the actual
+  *patterns* you'd hear out of a colmado speaker — merengue's tambora with
+  its pickup and straight-eighths güira, bachata's beat-4 lift with a
+  requinto arpeggio, dembow's boom-ch-boom-chick — without reproducing
+  anyone's recording. This is the same rule as the colmado signage: the look
+  and feel of the real thing, none of the actual IP.
+- **It cannot fail to load.** No download, no decode, no megabytes of
+  assets; works offline and inside the single-file artifact build.
+
+If you ever want licensed audio, the hook is deliberate: give a `MUSIC[]`
+entry a `src` and have the scheduler play a decoded buffer instead of
+calling its pattern function. **Don't delete the synth path** — it's the
+fallback, exactly like `makePerson()` is for the character models.
+
+Structure: `masterGain` feeds two independent buses — `musicGain` (the
+colmado's speaker, faded by distance in `updateAmbientAudio()`) and
+`engineGain` (the car, alive only while driving). Four things to know:
+
+- `scheduleMusic()` schedules **one bar at a time** and re-arms itself, and
+  skips synthesis entirely when muted or out of earshot — otherwise it would
+  build oscillators every bar for a speaker nobody can hear. Tracks rotate
+  every 8 bars so standing outside the colmado cycles the styles instead of
+  looping one phrase.
+- The engine is three detuned oscillators through a lowpass that **run
+  continuously from the moment audio starts**, idling at zero gain. Web
+  Audio nodes are one-shot — a stopped oscillator cannot be restarted — so
+  starting/stopping them per drive would both click and eventually fail.
+  `updateEngineAudio()` only moves frequency and cutoff.
+- Engine pitch tracks road speed (measured: 45 Hz idle → 105 Hz at
+  `CAR_TOP_SPEED`). There are no gears, so it just climbs — the mapping is
+  deliberately compressed, or it turns into a siren at top speed.
+- `stopEngineAudio()` is called from **both** `exitDriveMode()` and
+  `backToTitle()`. Leaving to the title mid-drive otherwise carries a
+  running engine into the menu.
+
+Browsers block audio until a user gesture, so `initAudio()` is called from
+the ENTER click, and `toggleMute()` resumes a suspended context.
 
 ## Known deliberate non-features
 
