@@ -3,17 +3,27 @@ const KEY='sprout_v2';
 function today(d){ return (d||new Date()).toISOString().slice(0,10); }
 function fmt(k){ return new Date(k+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
+/* Every habit belongs to a window: 'am', 'pm', or 'both' (loggable once in
+   EACH window — brushing genuinely is a twice-a-day thing). `anchor` is the
+   default routine cue; the player can rewrite it in their own words and that
+   override lives in S.anchors. Routine-based cues ("after I brush") build
+   automaticity better than bare clock times, which is why every habit ships
+   with one rather than leaving it blank. */
 const HABITS=[
-  {id:'teeth',  nm:'Brush teeth',         vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5'},
-  {id:'floss',  nm:'Floss',               vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5'},
-  {id:'gym',    nm:'Gym',                 vital:'STRENGTH',  ic:'💪', col:'#EF5350'},
-  {id:'stretch',nm:'Stretch',             vital:'MOBILITY',  ic:'🧘', col:'#AB47BC'},
-  {id:'journal',nm:'Journal 5m',          vital:'MIND',      ic:'🧠', col:'#7E57C2'},
-  {id:'bed',    nm:'Bed on time',         vital:'REST',      ic:'😴', col:'#5C6BC0'},
-  {id:'wake',   nm:'Wake up on time',     vital:'REST',      ic:'😴', col:'#5C6BC0'},
-  {id:'wstart', nm:'Start work on time',  vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726'},
-  {id:'wend',   nm:'End work on time',    vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726'}
+  {id:'wake',   nm:'Wake up on time',     vital:'REST',      ic:'😴', col:'#5C6BC0', window:'am',   anchor:'when the alarm goes'},
+  {id:'teeth',  nm:'Brush teeth',         vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5', window:'both', anchor:'after I get up / before bed'},
+  {id:'floss',  nm:'Floss',               vital:'HYGIENE',   ic:'🦷', col:'#B0BEC5', window:'both', anchor:'right after I brush'},
+  {id:'stretch',nm:'Stretch',             vital:'MOBILITY',  ic:'🧘', col:'#AB47BC', window:'am',   anchor:'before I sit down'},
+  {id:'gym',    nm:'Gym',                 vital:'STRENGTH',  ic:'💪', col:'#EF5350', window:'am',   anchor:'after coffee'},
+  {id:'wstart', nm:'Start work on time',  vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726', window:'am',   anchor:'when I sit at the desk'},
+  {id:'wend',   nm:'End work on time',    vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726', window:'pm',   anchor:'when I close the laptop'},
+  {id:'journal',nm:'Journal 5m',          vital:'MIND',      ic:'🧠', col:'#7E57C2', window:'pm',   anchor:'after dinner'},
+  {id:'bed',    nm:'Bed on time',         vital:'REST',      ic:'😴', col:'#5C6BC0', window:'pm',   anchor:'when I get in bed'}
 ];
+const WINDOWS={
+  am:{key:'am', nm:'MORNING', greet:'BUENOS DÍAS'},
+  pm:{key:'pm', nm:'NIGHT',   greet:'BUENAS NOCHES'}
+};
 const VITALS=[
   {k:'HYDRATION', ic:'💧', col:'#4FC3F7', src:'water'},
   {k:'NUTRITION', ic:'🍎', col:'#66BB6A', src:'diet'},
@@ -48,6 +58,13 @@ function blank(){
   return {
     playerId:newPlayerId(), schemaVersion:SCHEMA_VERSION,
     log:{}, workout:{}, diet:{}, water:{}, perfectDone:{},
+    /* Window hours are USER-CONFIGURABLE on purpose — the owner does not keep
+       normal hours, and a hardcoded window makes the whole loop unusable.
+       Hours are local, fractional (13.5 = 1:30pm). A window whose end is <=
+       its start wraps past midnight, which the night window does by default. */
+    windows:{am:{start:4,end:12}, pm:{start:18,end:3}},
+    anchors:{},            // habit id -> the player's own cue wording
+    claims:{},             // sessionDay -> {am:timestamp, pm:timestamp}
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
@@ -111,9 +128,9 @@ function habitStreak(){
     const k=today(d), lg=S.log[k]||{};
     // water used to be one of HABITS itself before it became a counter — keep it
     // part of "did everything today" for the streak, same as the perfect-day bonus
-    const all=HABITS.every(h=>lg[h.id]) && (S.water[k]||[]).length>=WATER_TARGET;
+    const all=HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET;
     if(all){ miss=0; st++; }
-    else if(k!==today()){ miss++; if(miss>=2) break; }
+    else if(k!==sessionDay()){ miss++; if(miss>=2) break; }
     d.setDate(d.getDate()-1);
   }
   return st;
@@ -124,7 +141,7 @@ function workoutStreak(){
     const k=today(d);
     if(workoutFor(d)!=='Off'){
       if(S.workout[k]==='done'){ miss=0; st++; }
-      else if(k!==today()){ miss++; if(miss>=2) break; }
+      else if(k!==sessionDay()){ miss++; if(miss>=2) break; }
     }
     d.setDate(d.getDate()-1);
   }
@@ -134,7 +151,7 @@ function mult(){ return Math.min(1+Math.max(habitStreak(),workoutStreak())*0.05,
 
 /* ---- vitals ---- */
 function vitalLevel(v){
-  const k=today(), lg=S.log[k]||{};
+  const k=sessionDay(), lg=S.log[k]||{};
   if(v.src==='diet') return Math.min(1,(S.diet[k]||[]).length/DIET_TARGET);
   if(v.src==='water') return Math.min(1,(S.water[k]||[]).length/WATER_TARGET);
   if(v.src==='workout'){
@@ -142,12 +159,19 @@ function vitalLevel(v){
     if(sc==='Off') return 1;
     return S.workout[k]==='done'?1:0;
   }
-  const done=v.src.filter(id=>lg[id]).length;
-  return done/v.src.length;
+  // a vital fed by a 'both' habit has two slots a day (one per window), so the
+  // meter fills across the day instead of maxing on the morning tap alone
+  let done=0,total=0;
+  v.src.forEach(id=>{
+    const h=HABITS.find(x=>x.id===id);
+    if(h&&h.window==='both'){ total+=2; done+=(habitDone(lg,h,'am')?1:0)+(habitDone(lg,h,'pm')?1:0); }
+    else { total+=1; done+=lg[id]?1:0; }
+  });
+  return total?done/total:0;
 }
 
 /* ---- earning ---- */
-const PAY={habit:12,workout:35,diet:6,water:2,perfect:140};
+const PAY={habit:12,workout:35,diet:6,water:2,perfect:140,window:40};
 function earn(kind, el){
   const p=PAY[kind]; if(!p) return;
   const m=mult();
@@ -189,21 +213,27 @@ function unearn(kind, el){
   float('-'+c+'💵', el, '#E63946');
 }
 
+/* Logs a habit into the window that is open right now. Returns false when the
+   tap isn't allowed (no window open, or this habit belongs to the other one) —
+   the UI never offers those rows, but this is the actual gate. */
 function toggleHabit(id, el){
-  const k=today();
+  const h=HABITS.find(x=>x.id===id); if(!h) return false;
+  if(!canLogNow(h)) return false;
+  const win=currentWindow(), k=sessionDay(), key=habitKey(h,win);
   S.log[k]=S.log[k]||{};
-  if(S.log[k][id]){
-    delete S.log[k][id];
+  if(S.log[k][key]||S.log[k][h.id]===true){
+    delete S.log[k][key];
+    if(h.window==='both'&&S.log[k][h.id]===true) delete S.log[k][h.id];  // legacy row
     unearn('habit', el);
     return true;
   }
-  S.log[k][id]=true;
-  earn('habit', el);
+  S.log[k][key]=true;
+  earn('habit', el);            // paid on the tap, never batched
   checkPerfectDay(el);
   save(); return true;
 }
 function markWorkout(el){
-  const k=today();
+  const k=sessionDay();
   if(S.workout[k]==='done'){
     delete S.workout[k];
     unearn('workout', el);
@@ -216,14 +246,14 @@ function markWorkout(el){
    logged, up to their own target/day, instead of being a single checkbox ---- */
 const DIET_TARGET=2, WATER_TARGET=8;
 function logCounter(field, target, payKind, el){
-  const k=today();
+  const k=sessionDay();
   S[field][k]=S[field][k]||[];
   if(S[field][k].length>=target) return false;
   S[field][k].push(Date.now());
   earn(payKind, el); save(); return true;
 }
 function unlogCounter(field, payKind, el){
-  const k=today();
+  const k=sessionDay();
   if(!S[field][k]||!S[field][k].length) return false;
   S[field][k].pop();
   unearn(payKind, el);
@@ -244,9 +274,10 @@ function unlogWater(el){ return unlogCounter('water', 'water', el); }
    it already paid out — undo doesn't claw the bonus back (see unearn()), so
    without this a habit could be toggled off and back on for free cash. ---- */
 function checkPerfectDay(el){
-  const k=today(), lg=S.log[k]||{};
+  const k=sessionDay(), lg=S.log[k]||{};
   if(S.perfectDone[k]) return;
-  if(HABITS.every(h=>lg[h.id]) && (S.water[k]||[]).length>=WATER_TARGET){
+  // a 'both' habit counts only when BOTH windows logged it — habitFullyDone()
+  if(HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET){
     S.perfectDone[k]=true; save();
     setTimeout(()=>{ earn('perfect', el); toast('PERFECT DAY'); impact('PERFECT!'); },320);
   }
@@ -377,3 +408,108 @@ function checkIncident(){
   }
 }
 
+
+/* ===================== WINDOWS & THE CORE PATH =====================
+   Two windows a day, morning and night. This is an appointment mechanic AND
+   the cue that builds automaticity: repetition in a consistent context is
+   what makes a behaviour automatic, more than the size of the reward.
+
+   ONLY EARNING IS GATED. Nothing here should ever stop the player walking,
+   driving, browsing or buying — locking someone out of the world is
+   punishment, not anticipation. canLogNow() gates logging and nothing else. */
+
+/* Is `h` (a fractional local hour) inside window `w`? A window whose end is
+   at or before its start wraps past midnight — the default night window
+   (18:00 -> 03:00) does exactly this. */
+function inWindow(w,h){
+  return (w.start<w.end) ? (h>=w.start&&h<w.end) : (h>=w.start||h<w.end);
+}
+function hourOf(now){ now=now||new Date(); return now.getHours()+now.getMinutes()/60; }
+
+/* THE DAY BOUNDARY IS THE MORNING WINDOW'S START, NOT MIDNIGHT.
+   Logging "in bed on time" at 1am is last night's habit, not today's, so
+   anything before the morning window opens belongs to the previous day. One
+   rule, and it makes a night window that wraps past midnight behave the way
+   a person would expect. Everything that records or reads "what happened
+   today" uses this rather than today(). */
+function sessionDay(now){
+  now=now||new Date();
+  if(hourOf(now)<S.windows.am.start){
+    const d=new Date(now); d.setDate(d.getDate()-1); return today(d);
+  }
+  return today(now);
+}
+/* The window open right now, or null during the lull between them. If the two
+   are configured to overlap, morning wins — deterministic beats clever. */
+function currentWindow(now){
+  const h=hourOf(now);
+  if(inWindow(S.windows.am,h)) return 'am';
+  if(inWindow(S.windows.pm,h)) return 'pm';
+  return null;
+}
+function windowHabits(win){
+  return HABITS.filter(x=>x.window===win||x.window==='both');
+}
+/* A 'both' habit is stored once per window ('teeth:am'), single-window habits
+   keep their bare id — so saves written before windows existed still read
+   correctly, and habitDone() treats a legacy `true` as satisfying either. */
+function habitKey(h,win){ return h.window==='both' ? h.id+':'+win : h.id; }
+function habitDone(lg,h,win){ return lg[h.id]===true || !!lg[habitKey(h,win)]; }
+function habitFullyDone(lg,h){
+  if(lg[h.id]===true) return true;                                   // legacy
+  return h.window==='both' ? (!!lg[h.id+':am']&&!!lg[h.id+':pm']) : !!lg[h.id];
+}
+/* The gate. False means the tap does nothing: either no window is open, or
+   this habit belongs to the other one. There is deliberately no retroactive
+   logging — a window that has closed is closed, which is what makes the
+   appointment real. */
+function canLogNow(h,now){
+  const win=currentWindow(now);
+  if(!win) return false;
+  return h.window===win||h.window==='both';
+}
+function windowProgress(win,now){
+  const lg=S.log[sessionDay(now)]||{}, hs=windowHabits(win);
+  const done=hs.filter(h=>habitDone(lg,h,win)).length;
+  return {done, total:hs.length, complete:done>=hs.length};
+}
+/* Paid once per window per day, the first time every habit in it is logged.
+   The second attempt is rejected by the S.claims record, and an attempt
+   outside the window is rejected before that. */
+function claimWindow(win,el,now){
+  if(currentWindow(now)!==win) return false;
+  const k=sessionDay(now);
+  S.claims[k]=S.claims[k]||{};
+  if(S.claims[k][win]) return false;
+  if(!windowProgress(win,now).complete) return false;
+  S.claims[k][win]=Date.now();
+  earn('window',el); save();
+  return true;
+}
+function windowClaimed(win,now){
+  const c=S.claims[sessionDay(now)];
+  return !!(c&&c[win]);
+}
+/* When does the next window open, in ms? Used by the close card so the loop
+   has a visible ending and a stated next appointment. */
+function nextWindowIn(now){
+  now=now||new Date();
+  const h=hourOf(now);
+  let best=null;
+  ['am','pm'].forEach(k=>{
+    const w=S.windows[k];
+    let d=w.start-h; if(d<=0) d+=24;
+    if(best===null||d<best.hours) best={key:k,hours:d};
+  });
+  return best;
+}
+function fmtIn(hours){
+  const m=Math.round(hours*60);
+  return m<60 ? m+'m' : Math.floor(m/60)+'h '+(m%60?(m%60)+'m':'');
+}
+function anchorFor(h){ return S.anchors[h.id]||h.anchor||''; }
+function setAnchor(id,text){
+  const t=(text||'').trim().slice(0,60);
+  if(t) S.anchors[id]=t; else delete S.anchors[id];
+  save();
+}
