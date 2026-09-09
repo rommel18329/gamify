@@ -205,7 +205,9 @@ function earn(kind, el, amount){
   S.cash+=c; S.lifetime+=c;
   let sTxt='';
   if(kind==='workout'||kind==='perfect'){
-    const st=kind==='perfect'?6:1; S.standing+=st; sTxt=' ⭐+'+st;
+    // respect() is how the block reads you — it converts into standing
+    const st=kind==='perfect'?6+Math.floor(respect()/8):1;
+    S.standing+=st; sTxt=' ⭐+'+st;
   }
   S.xp+=Math.round(p*m*0.8);
   while(S.xp>=xpNeed()){ S.xp-=xpNeed(); S.level++; impact('LEVEL '+S.level); }
@@ -308,7 +310,9 @@ function checkPerfectDay(el){
     const got=grantFreezeIfDue();
     save();
     setTimeout(()=>{
-      earn('perfect', el); impact('PERFECT!');
+      earn('perfect', el, null);
+      if(comfort()>0) earn('perfect', el, comfort());   // the house paying you back
+      impact('PERFECT!');
       toast(got?'PERFECT DAY — A NEIGHBOUR OWES YOU ONE':'PERFECT DAY');
     },320);
   }
@@ -412,7 +416,12 @@ function buyMod(cat,i,price){
 }
 
 /* ---- visibility & incidents ---- */
-function visibility(){ return Math.round(VEH[S.vehicle.tier].p + Math.floor(S.lifetime/900) + S.level*2 + S.standing*.4); }
+/* How much of a target you look like. The car and the drip both push this up —
+   that is the point, and it is what stops the cosmetic tracks being free. */
+function visibility(){
+  return Math.round(VEH[S.vehicle.tier].p + Math.floor(S.lifetime/900) +
+                    S.level*2 + S.standing*.4 + respect()*0.5);
+}
 const THREATS=[
   {max:25,nm:'Package theft',d:'Someone grabbing deliveries off porches.',p:12},
   {max:55,nm:'Vehicle break-in',d:'Car doors getting pulled at 3am.',p:26},
@@ -428,7 +437,10 @@ function checkIncident(){
       const d=deter();
       if(d>=S.incident.p){ S.defended++; ev(S.incident.nm+' — systems handled it while you were out.','win'); }
       else{
-        const lost=Math.floor(S.cash*Math.min(.45,(S.incident.p-d)/160)*(1-safeProt()));
+        // comfort() is the house being worth putting right — a kept-up place
+        // takes less out of you when something does get through
+        const soften=1-Math.min(.35,comfort()/170);
+        const lost=Math.floor(S.cash*Math.min(.45,(S.incident.p-d)/160)*(1-safeProt())*soften);
         S.cash-=lost;
         for(const k in SEC) if(S.security[k]>0) S.cond[k]=Math.max(0,S.cond[k]-35);
         S.breached++;
@@ -438,10 +450,14 @@ function checkIncident(){
     }
     return;
   }
-  if(Date.now()-S.lastCheck<GAP) return;
+  // a watched block is checked less often — up to roughly double the gap
+  if(Date.now()-S.lastCheck<GAP*(1+watch()/45)) return;
   S.lastCheck=Date.now();
   if(S.cash<250){ save(); return; }
-  const t=threat(), p=Math.round(t.p*(.8+Math.random()*.5)), d=deter();
+  const t=threat();
+  // and what does show up is smaller when the neighbours are paying attention
+  const p=Math.max(1,Math.round(t.p*(.8+Math.random()*.5)*(1-Math.min(.4,watch()/110))));
+  const d=deter();
   if(d>p*1.7){ ev(t.nm+' attempt — deterred before it started.','win'); save(); return; }
   S.incident={spawn:Date.now(),deadline:Date.now()+GRACE,p,nm:t.nm,d:t.d,done:false};
   ev(t.nm+' in progress.','loss'); save();
@@ -714,7 +730,9 @@ const SCRATCH=[
   {p:0.03, lo:400, hi:900, nm:'EL PREMIO GORDO'}
 ];
 function rollScratch(){
-  let r=Math.random(), acc=0;
+  // respect() nudges the odds toward the better bands — the colmado owner
+  // rounds in your favour when he knows you. Never a guarantee, just a tilt.
+  let r=Math.max(0,Math.random()-Math.min(.18,respect()/260)), acc=0;
   for(const b of SCRATCH){ acc+=b.p; if(r<acc)
     return {amount:Math.round(b.lo+Math.random()*(b.hi-b.lo)), nm:b.nm, big:b.lo>=120}; }
   const b=SCRATCH[0];
@@ -783,5 +801,45 @@ function dailyBaseline(){
   let t=0;
   HABITS.forEach(h=>t+=PAY.habit*(h.window==='both'?2:1));
   t+=PAY.water*WATER_TARGET + PAY.diet*DIET_TARGET + PAY.window*2 + PAY.perfect;
+  t+=comfort();   // a comfortable house is worth a little every day
   return t;
+}
+
+/* ===================== WHAT THE COSMETIC TRACKS ACTUALLY DO =================
+   Every track has to change something real, or it is set dressing you stop
+   caring about. SEGURIDAD already fed deter() and CARRO already fed
+   visibility(); these three were purely visual until now.
+
+   The shape is deliberately a TENSION, not five bonuses: two tracks make you
+   MORE of a target and three protect you, so spending is a real decision
+   rather than a queue.
+
+     SEGURIDAD  deterrence  — beats an incident once it starts
+     BARRIO     watch       — stops incidents starting at all
+     CASA       comfort     — softens what a loss costs you
+     CARRO      visibility  — RAISES threat (a nice car gets noticed)
+     DRIP       respect     — better standing and luck, but ALSO raises threat
+   ------------------------------------------------------------------------ */
+
+/* LA CASA — a kept-up house costs less to put right and is worth more to come
+   home to. Softens losses and repairs; adds a little to the perfect-day bonus. */
+function comfort(){
+  const c=S.casa;
+  return (c.paint?4:0)+(c.tinaco?6:0)+(c.porch?5:0)+(c.plants?4:0)+
+         (c.dish?5:0)+(c.ac?9:0)+(c.driveway?7:0)+(c.floor2?20:0);
+}
+/* EL BARRIO — neighbours who know you notice strangers. This is the only
+   thing that makes incidents rarer rather than survivable. */
+function watch(){
+  const b=S.barrio;
+  return (b.curb?3:0)+(b.light?8:0)+(b.tab?6:0)+(b.bench?7:0)+
+         (b.mural?5:0)+(b.awning?6:0)+(b.hoop?9:0);
+}
+/* EL DRIP — how you carry yourself. Earns standing and better luck at the
+   colmado, at the cost of being noticed. Looking like you have something is
+   exactly how you become worth robbing, so drip is NOT free. */
+function respect(){
+  const d=S.drip;
+  return (d.shirt||0)*4+(d.pants?3:0)+(d.shoes||0)*4+(d.hat?3:0)+
+         (d.chain||0)*6+(d.glasses?3:0);
 }

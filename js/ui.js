@@ -466,7 +466,8 @@ function rebuildCar(){
   // once it's drivable) rather than snapping it back to its parked position
   const pos=world.car.position.clone(), rot=world.car.rotation.y;
   scene.remove(world.car);
-  world.car=modelCar(S.vehicle.paint)||makeCar();
+  homePlot().upgrades=homePlotUpgrades();
+  world.car=modelCar(homePlot().upgrades.vehicle)||makeCar();
   world.car.position.copy(pos); world.car.rotation.y=rot;
   scene.add(world.car);
 }
