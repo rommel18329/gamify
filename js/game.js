@@ -60,7 +60,11 @@ function emptyUpgrades(){
     person:{skin:'#C9884F',outfit:'#2C3242'},
     casa:{paint:0,tinaco:0,porch:0,plants:0,dish:0,ac:0,driveway:0,floor2:0},
     drip:{shirt:0,pants:0,shoes:0,hat:0,chain:0,glasses:0},
-    barrio:{curb:0,light:0,tab:0,bench:0,mural:0,awning:0,hoop:0}
+    barrio:{curb:0,light:0,tab:0,bench:0,mural:0,awning:0,hoop:0},
+    // MAESTRIA — added here AND in homePlotUpgrades() below. CASA/DRIP/BARRIO
+    // each rendered nothing for a whole step because only one of the two was
+    // updated; the builders read the RECORD and never S.
+    maestria:{placa:0,banderas:0,jardin:0,pergola:0,parrilla:0,terraza:0,fuente:0}
   };
 }
 /* The ONE place my save crosses into the render model. Called from
@@ -72,7 +76,8 @@ function homePlotUpgrades(){
     person:Object.assign({},S.person),
     casa:Object.assign({},S.casa),
     drip:Object.assign({},S.drip),
-    barrio:Object.assign({},S.barrio)
+    barrio:Object.assign({},S.barrio),
+    maestria:Object.assign({},S.maestria)
   };
 }
 const PLOTS=[
@@ -1215,6 +1220,173 @@ function buildPlotUpgrades(plot,parent){
     const dv=M(new THREE.BoxGeometry(6.4,.16,13),nightMode?0x4A4740:0x9E9A90,
       {ink:false,lift:.05,map:detailMap('wall',3,5)});
     dv.position.set(11,.08,4); detail.add(dv);
+  }
+  /* ---- MAESTRÍA ----
+     Bought only with habits that stick, so every one of these is sited where
+     you actually walk: the placa is at eye height by the door, the beds and the
+     fountain are in the yard you cross to the car, the pérgola is over the
+     galería you stand under. A trophy you have to go looking for is not a
+     trophy. All plot-LOCAL, parented to `detail` like everything else here. */
+  const mst=up.maestria||{};
+  /* Each item is its own group tagged with its id. That is not tidiness: it is
+     what lets a test ask where a purchase actually landed in world space and
+     whether it overlaps something already there, instead of a human guessing
+     camera angles at screenshots. */
+  const mstGroup=(id)=>{ const g=new THREE.Group(); g.userData.mst=id; detail.add(g); return g; };
+  if(mst.placa){ const G=mstGroup('placa');
+    // brass plate on the front wall, beside the door
+    const pl=M(new THREE.BoxGeometry(1.5,.62,.07),nightMode?0x7A6320:0xC8A24E,{inkT:.03});
+    pl.position.set(2.6,2.15,3.58); G.add(pl);
+    const en=M(new THREE.BoxGeometry(1.16,.30,.03),nightMode?0x2A2110:0x5E4718,{ink:false});
+    en.position.set(2.6,2.15,3.63); G.add(en);
+    [[-.62,.24],[.62,.24],[-.62,-.24],[.62,-.24]].forEach(([dx,dy])=>{
+      const sc=M(new THREE.CylinderGeometry(.05,.05,.05,8),nightMode?0x8A8069:0xE4DCC8,{ink:false});
+      sc.rotation.x=Math.PI/2; sc.position.set(2.6+dx,2.15+dy,3.63); G.add(sc);
+    });
+  }
+  if(mst.banderas){ const G=mstGroup('banderas');
+    /* Two runs of banderitas across the yard. Real geometry per flag rather
+       than a textured strip — a strip reads as a painted plank from any angle,
+       and these are meant to be seen from underneath. ink:false: an outline on
+       each of forty slivers is noise. */
+    const COLS=[0xE63946,0xF4F0E2,0x2E6B8A,0xFFD23F,0x4E7A42];
+    /* Strung across the OUTER yard, at z 11.5 and 14 — measured, not guessed.
+       Both runs originally crossed z 6..11, which put them straight through the
+       pérgola's beams at z 4.2..8.2: sixteen flags threaded between the slats.
+       The fence line is at z 15.5, so 14 is the last string that still has
+       something to tie to. */
+    [[-9.5,5.5,9.5,8.5],[-9.5,11.0,9.5,8.0]].forEach(([x0,y0,x1,y1],r)=>{
+      const n=16;
+      for(let i=0;i<=n;i++){
+        const t=i/n, x=x0+(x1-x0)*t;
+        // a hanging line sags — a straight one reads as a wire, not a string
+        const z=(r?14:11.5), y=5.0+Math.sin(Math.PI*t)*-.6+(r?.2:0);
+        if(i<n){
+          const fl=M(new THREE.ConeGeometry(.17,.42,3),COLS[i%COLS.length],{ink:false});
+          fl.position.set(x+(x1-x0)/n*.5,y-.28,z); fl.rotation.x=Math.PI;
+          G.add(fl);
+        }
+        const kn=M(new THREE.BoxGeometry((x1-x0)/n,.035,.035),nightMode?0x6E6857:0xA79E88,{ink:false});
+        kn.position.set(x+(x1-x0)/n*.5,y,z); G.add(kn);
+      }
+    });
+  }
+  if(mst.jardin){ const G=mstGroup('jardin');
+    // raised beds down the west side, on the path to the car
+    [2.0,5.2,8.4].forEach((z,i)=>{
+      const bed=new THREE.Group();
+      const soil=M(new THREE.BoxGeometry(1.5,.42,2.5),nightMode?0x2E241A:0x4A3A26,
+        {inkT:.02,map:detailMap('wall',1,2)});
+      soil.position.y=.30; bed.add(soil);
+      [[0,.79,1.30],[0,.79,-1.30],[.79,0,0],[-.79,0,0]].forEach((v,k)=>{
+        const w=k<2?1.66:2.66;
+        const pk=M(new THREE.BoxGeometry(k<2?w:.16,.52,k<2?.16:w),
+          nightMode?0x5E4718:0x8A6E3A,{inkT:.03});
+        pk.position.set(v[0],.30,v[2]); bed.add(pk);
+      });
+      for(let k=0;k<5;k++){
+        const st=M(new THREE.SphereGeometry(.30,10,8),nightMode?0x2F4A2C:0x5C8A44,{ink:false});
+        st.scale.set(1,.8,1);
+        st.position.set(-.4+(k%3)*.4,.66,-.8+Math.floor(k/3)*.9+(i%2?.2:0)); bed.add(st);
+      }
+      bed.position.set(-9.6,0,z); G.add(bed);
+    });
+  }
+  if(mst.pergola){ const G=mstGroup('pergola');
+    // post-and-beam over the galería, in front of the house
+    const pg=new THREE.Group();
+    [[-5.6,4.2],[5.6,4.2],[-5.6,8.2],[5.6,8.2]].forEach(([x,z])=>{
+      const post=M(new THREE.BoxGeometry(.30,3.3,.30),nightMode?0x5E4718:0x8A6E3A,{inkT:.03});
+      post.position.set(x,1.65,z); pg.add(post);
+    });
+    [4.2,8.2].forEach(z=>{
+      const bm=M(new THREE.BoxGeometry(11.8,.26,.22),nightMode?0x4E3925:0x7A5B39,{inkT:.03});
+      bm.position.set(0,3.42,z); pg.add(bm);
+    });
+    // slats: real geometry, spaced, so it throws a striped shadow you can read
+    for(let i=0;i<=14;i++){
+      const sl=M(new THREE.BoxGeometry(.16,.14,4.3),nightMode?0x5E4718:0x8A6E3A,{ink:false});
+      sl.position.set(-5.7+i*.815,3.62,6.2); pg.add(sl);
+    }
+    G.add(pg);
+  }
+  if(mst.parrilla){ const G=mstGroup('parrilla');
+    // out back, clear of the house's rear wall at z=-7.5
+    const pr=new THREE.Group();
+    const drum=M(new THREE.CylinderGeometry(.62,.62,1.9,16,1,false),
+      nightMode?0x23282F:0x3A424C,{inkT:.02});
+    drum.rotation.z=Math.PI/2; drum.position.y=1.0; pr.add(drum);
+    const lid=M(new THREE.CylinderGeometry(.66,.66,1.9,16,1,false,0,Math.PI),
+      nightMode?0x1A1E24:0x2A3038,{ink:false});
+    lid.rotation.z=Math.PI/2; lid.rotation.x=-0.5; lid.position.y=1.24; pr.add(lid);
+    [-.7,.7].forEach(x=>{
+      [[-.42],[.42]].forEach(([z])=>{
+        const lg=limb(.05,.05,1.0,nightMode?0x1A1E24:0x2A3038,{ink:false});
+        lg.position.set(x,.5,z); pr.add(lg); });
+    });
+    const ch=M(new THREE.CylinderGeometry(.13,.13,1.5,10),nightMode?0x23282F:0x3A424C,{ink:false});
+    ch.position.set(.86,2.1,0); pr.add(ch);
+    // the counter beside it — the bit that makes it a place, not an object
+    const ct=M(new THREE.BoxGeometry(2.2,.16,.9),nightMode?0x7C7566:0xBFB6A4,{inkT:.03});
+    ct.position.set(2.3,.95,0); pr.add(ct);
+    [[1.4,-.35],[1.4,.35],[3.2,-.35],[3.2,.35]].forEach(([x,z])=>{
+      const l=M(new THREE.BoxGeometry(.13,.9,.13),nightMode?0x4E3925:0x7A5B39,{ink:false});
+      l.position.set(x,.45,z); pr.add(l); });
+    pr.position.set(-1.6,0,-10.6); G.add(pr);
+  }
+  if(mst.terraza){ const G=mstGroup('terraza');
+    /* On the roof, so it is the one upgrade that changes the SKYLINE — the
+       house reads differently from across the block, which is the point of
+       buying the last thing on the track. Sits above the roof slab; if
+       casa.floor2 is up it sits on that instead. */
+    const y=up.casa&&up.casa.floor2 ? 10.95 : 6.55;
+    const tz=new THREE.Group();
+    const deck=M(new THREE.BoxGeometry(9.4,.18,7.4),nightMode?0x6E6857:0xA79E88,
+      {inkT:.02,map:detailMap('wall',4,3)});
+    deck.position.y=.09; tz.add(deck);
+    [[0,3.7,9.4,0],[0,-3.7,9.4,0],[4.7,0,7.4,Math.PI/2],[-4.7,0,7.4,Math.PI/2]]
+      .forEach(([x,z,w,rot])=>{
+        const rail=rejas(w-.3,.95,nightMode?0x1E2A32:0x2B3A44,.55);
+        rail.position.set(x,.65,z); rail.rotation.y=rot; tz.add(rail);
+      });
+    // two chairs and a table, or it is a balcony nobody uses
+    const tb=M(new THREE.CylinderGeometry(.62,.62,.09,14),nightMode?0x4E3925:0x7A5B39,{inkT:.03});
+    tb.position.set(0,.86,0); tz.add(tb);
+    const tl=limb(.07,.07,.78,nightMode?0x4E3925:0x7A5B39,{ink:false});
+    tl.position.set(0,.47,0); tz.add(tl);
+    [[-1.5,0],[1.5,0]].forEach(([x,z])=>{
+      const seat=M(new THREE.BoxGeometry(.7,.1,.7),nightMode?0x2F4A2C:0x4E7A42,{inkT:.03});
+      seat.position.set(x,.62,z); tz.add(seat);
+      const bk=M(new THREE.BoxGeometry(.7,.66,.1),nightMode?0x2F4A2C:0x4E7A42,{inkT:.03});
+      bk.position.set(x,.95,z+(x<0?-.3:.3)); tz.add(bk);
+    });
+    tz.position.set(0,y,-2); G.add(tz);
+  }
+  if(mst.fuente){ const G=mstGroup('fuente');
+    const fn=new THREE.Group();
+    const basin=M(new THREE.CylinderGeometry(1.75,1.55,.62,20),
+      nightMode?0x6E6857:0xA79E88,{inkT:.02,map:detailMap('wall',6,1)});
+    basin.position.y=.31; fn.add(basin);
+    const water=M(new THREE.CylinderGeometry(1.58,1.58,.10,20),
+      nightMode?0x14313F:0x2E6B8A,{ink:false,lift:.04});
+    water.position.y=.60; fn.add(water);
+    const ped=M(new THREE.CylinderGeometry(.30,.44,1.05,14),nightMode?0x7C7566:0xBFB6A4,{inkT:.03});
+    ped.position.y=1.12; fn.add(ped);
+    const bowl=M(new THREE.CylinderGeometry(.86,.42,.30,16),nightMode?0x6E6857:0xA79E88,{inkT:.03});
+    bowl.position.y=1.78; fn.add(bowl);
+    // the column of water: a mesh, not a light — the toon material sums lights
+    // independently and another one would clip a top-lit face to white
+    const jet=new THREE.Mesh(new THREE.CylinderGeometry(.07,.13,.9,10),
+      new THREE.MeshBasicMaterial({color:0xBFE6F5,transparent:true,opacity:.5,
+        blending:THREE.AdditiveBlending,depthWrite:false}));
+    jet.position.y=2.35; fn.add(jet);
+    const spl=new THREE.Mesh(new THREE.TorusGeometry(.52,.05,6,16),
+      new THREE.MeshBasicMaterial({color:0xBFE6F5,transparent:true,opacity:.35,
+        blending:THREE.AdditiveBlending,depthWrite:false}));
+    spl.rotation.x=Math.PI/2; spl.position.y=1.95; fn.add(spl);
+    // moved out of the pérgola's corner (it reaches z 8.4); the driveway runs
+    // x 7.8..14.2 by z -2.5..10.5, so this clears that too
+    fn.position.set(7.6,0,12.4); G.add(fn);
   }
   if(casa.floor2){
     // the second storey the rebar was always waiting for. Must follow the

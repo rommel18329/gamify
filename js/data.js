@@ -18,7 +18,44 @@ const HABITS=[
   {id:'wstart', nm:'Start work on time',  vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726', window:'am',   anchor:'when I sit at the desk'},
   {id:'wend',   nm:'End work on time',    vital:'DISCIPLINE',ic:'⚙️', col:'#FFA726', window:'pm',   anchor:'when I close the laptop'},
   {id:'journal',nm:'Journal 5m',          vital:'MIND',      ic:'🧠', col:'#7E57C2', window:'pm',   anchor:'after dinner'},
-  {id:'bed',    nm:'Bed on time',         vital:'REST',      ic:'😴', col:'#5C6BC0', window:'pm',   anchor:'when I get in bed'}
+  {id:'bed',    nm:'Bed on time',         vital:'REST',      ic:'😴', col:'#5C6BC0', window:'pm',   anchor:'when I get in bed'},
+
+  /* ---- THE HANDOFF: what each habit becomes once it runs without you ------
+     A habit with an `after` is NOT in the list until the habit it names is
+     mastered, and mastering a habit RETIRES it — the successor takes its slot
+     rather than sitting alongside it. That matters both ways round:
+
+       - Psychologically it is the honest move. Once brushing your teeth is
+         automatic, ticking a box for it is theatre; asking for two timed
+         minutes instead is the same behaviour escalated, which is the only
+         thing left that a tracker can usefully do for you.
+       - Mechanically it is what stops the daily list from growing to twenty
+         items and stops income collapsing: the successor starts at zero
+         automaticity and therefore pays FULL rate again (see habitPayScale).
+
+     Reaching automaticity must open more than it closes. This list, the
+     MAESTRIA track and the mastery achievements are the three things it
+     opens; the only thing it closes is the fading payout on a habit you no
+     longer need paying for. */
+  {id:'wake2', after:'wake', nm:'Up on the first alarm', vital:'REST', ic:'😴', col:'#5C6BC0', window:'am', anchor:'the moment it goes off — no second one'},
+  {id:'teeth2', after:'teeth', nm:'Two full minutes, timed', vital:'HYGIENE', ic:'🦷', col:'#B0BEC5', window:'both', anchor:'after I get up / before bed'},
+  {id:'floss2', after:'floss', nm:'Floss every tooth + rinse', vital:'HYGIENE', ic:'🦷', col:'#B0BEC5', window:'both', anchor:'right after I brush'},
+  {id:'stretch2', after:'stretch', nm:'Ten minutes of mobility', vital:'MOBILITY', ic:'🧘', col:'#AB47BC', window:'am', anchor:'before I sit down'},
+  {id:'gym2', after:'gym', nm:'Gym + conditioning finisher', vital:'STRENGTH', ic:'💪', col:'#EF5350', window:'am', anchor:'after coffee'},
+  {id:'wstart2', after:'wstart', nm:'First 90 minutes, phone away', vital:'DISCIPLINE', ic:'⚙️', col:'#FFA726', window:'am', anchor:'when I sit at the desk'},
+  {id:'wend2', after:'wend', nm:'Shutdown list before you close', vital:'DISCIPLINE', ic:'⚙️', col:'#FFA726', window:'pm', anchor:'when I close the laptop'},
+  {id:'journal2', after:'journal', nm:'Journal + tomorrow planned', vital:'MIND', ic:'🧠', col:'#7E57C2', window:'pm', anchor:'after dinner'},
+  {id:'bed2', after:'bed', nm:'Phone out of the room', vital:'REST', ic:'😴', col:'#5C6BC0', window:'pm', anchor:'when I get in bed'},
+
+  {id:'wake3', after:'wake2', nm:'Up before the alarm', vital:'REST', ic:'😴', col:'#5C6BC0', window:'am', anchor:'when the light gets in'},
+  {id:'teeth3', after:'teeth2', nm:'Brush, tongue, interdental', vital:'HYGIENE', ic:'🦷', col:'#B0BEC5', window:'both', anchor:'after I get up / before bed'},
+  {id:'floss3', after:'floss2', nm:'Floss before you are tired', vital:'HYGIENE', ic:'🦷', col:'#B0BEC5', window:'both', anchor:'right after I brush'},
+  {id:'stretch3', after:'stretch2', nm:'Mobility with the hard positions', vital:'MOBILITY', ic:'🧘', col:'#AB47BC', window:'am', anchor:'before I sit down'},
+  {id:'wend3', after:'wend2', nm:'Nothing reopens after the shutdown', vital:'DISCIPLINE', ic:'⚙️', col:'#FFA726', window:'pm', anchor:'when I close the laptop'},
+  {id:'gym3', after:'gym2', nm:'Every set written down', vital:'STRENGTH', ic:'💪', col:'#EF5350', window:'am', anchor:'between sets, not after'},
+  {id:'wstart3', after:'wstart2', nm:'One deep block before noon', vital:'DISCIPLINE', ic:'⚙️', col:'#FFA726', window:'am', anchor:'straight after the first coffee'},
+  {id:'journal3', after:'journal2', nm:'Journal + ten pages read', vital:'MIND', ic:'🧠', col:'#7E57C2', window:'pm', anchor:'after dinner, before the phone'},
+  {id:'bed3', after:'bed2', nm:'Same bedtime, no drift', vital:'REST', ic:'😴', col:'#5C6BC0', window:'pm', anchor:'when the alarm to go up goes off'}
 ];
 const WINDOWS={
   am:{key:'am', nm:'MORNING', greet:'BUENOS DÍAS'},
@@ -64,6 +101,12 @@ function blank(){
        its start wraps past midnight, which the night window does by default. */
     windows:{am:{start:4,end:12}, pm:{start:18,end:3}},
     anchors:{},            // habit id -> the player's own cue wording
+    /* AUTOMATICITY — see the block above habitStreakFor(). auto is effective
+       repetitions per habit, settled through lastRoll; mastered/unlocked/
+       retired are the handoff's bookkeeping, all keyed by sessionDay so
+       history can be judged by the roster it actually had. */
+    auto:{}, mastered:{}, unlocked:{}, retired:{},
+    maestria:{placa:0,banderas:0,jardin:0,pergola:0,parrilla:0,terraza:0,fuente:0},
     claims:{},             // sessionDay -> {am:timestamp, pm:timestamp}
     casa:{paint:0,tinaco:0,porch:0,plants:0,dish:0,ac:0,driveway:0,floor2:0},
     drip:{shirt:0,pants:0,shoes:0,hat:0,chain:0,glasses:0},
@@ -141,7 +184,7 @@ function habitStreak(){
     // S.covered[k] means a freeze was spent on that day — a neighbour covered
     // for you, so the streak survives it (see rollDay())
     const all=S.covered[k] ||
-      (HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET);
+      (habitsOn(k).every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET);
     if(all){ miss=0; st++; }
     else if(k!==sessionDay()){ miss++; if(miss>=2) break; }
     d.setDate(d.getDate()-1);
@@ -199,9 +242,14 @@ const PAY={habit:12,workout:35,diet:6,water:2,perfect:140,window:40};
    takes. A flat earn is never unearned — unearn() recomputes PAY[kind]*mult()
    and could not mirror an arbitrary amount, and windfalls are not undoable
    anyway. */
-function earn(kind, el, amount){
+function earn(kind, el, amount, scale){
   const flat=(amount!=null);
-  const p=flat?amount:PAY[kind]; if(!p) return;
+  let p=flat?amount:PAY[kind]; if(!p) return;
+  /* `scale` multiplies the BASE before the streak multiplier: it is how the
+     automaticity fade (habitPayScale) and the mastery bonus reach the one
+     money path without either of them becoming a second one. A flat windfall
+     is never scaled — it is not earned effort. */
+  if(!flat&&scale!=null) p*=scale;
   const m=flat?1:mult();
   const c=Math.round(p*m);
   S.cash+=c; S.lifetime+=c;
@@ -226,8 +274,9 @@ function xpNeed(){ return Math.round(100*Math.pow(1.18,S.level-1)); }
    bonus (see checkPerfectDay/S.perfectDone) — undoing one habit after a
    perfect day already paid out isn't "this never happened," just "changed my
    mind about today," so the bonus stands. */
-function unearn(kind, el){
-  const p=PAY[kind]; if(!p) return;
+function unearn(kind, el, scale){
+  let p=PAY[kind]; if(!p) return;
+  if(scale!=null) p*=scale;    // must mirror earn()'s scale or an undo overpays
   const m=mult();
   const c=Math.round(p*m);
   S.cash=Math.max(0,S.cash-c); S.lifetime=Math.max(0,S.lifetime-c);
@@ -251,16 +300,25 @@ function toggleHabit(id, el){
   if(!canLogNow(h)) return false;
   const win=currentWindow(), k=sessionDay(), key=habitKey(h,win);
   S.log[k]=S.log[k]||{};
+  /* THE SCALE IS READ ONCE, BEFORE THE LOG CHANGES, AND BOTH BRANCHES USE IT.
+     habitPayScale() reads automaticity, which counts today's rep the moment it
+     is written — so computing it after the mutation gives the log branch and
+     the undo branch two DIFFERENT numbers, and the undo one is always larger.
+     Tapping a habit on and off would then have paid out the difference every
+     time. Taking the reading first makes the undo an exact mirror. */
+  const scale=habitPayScale(h);
   if(S.log[k][key]||S.log[k][h.id]===true){
     delete S.log[k][key];
     if(h.window==='both'&&S.log[k][h.id]===true) delete S.log[k][h.id];  // legacy row
-    unearn('habit', el);
+    unearn('habit', el, scale);
     return true;
   }
   S.log[k][key]=true;
-  earn('habit', el);            // paid on the tap, never batched
+  // paid on the tap, never batched — faded by how automatic this one already is
+  earn('habit', el, null, scale);
   noteLogTime();
   checkPerfectDay(el);
+  checkMastery();
   save(); checkAchievements(); return true;
 }
 function markWorkout(el){
@@ -316,12 +374,12 @@ function checkPerfectDay(el){
   const k=sessionDay(), lg=S.log[k]||{};
   if(S.perfectDone[k]) return;
   // a 'both' habit counts only when BOTH windows logged it — habitFullyDone()
-  if(HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET){
+  if(activeHabits().every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET){
     S.perfectDone[k]=true;
     const got=grantFreezeIfDue();
     save();
     setTimeout(()=>{
-      earn('perfect', el, null);
+      earn('perfect', el, null, masteryBonus());   // where the faded cash went
       if(comfort()>0) earn('perfect', el, comfort());   // the house paying you back
       impact('PERFECT!');
       toast(got?'PERFECT DAY — A NEIGHBOUR OWES YOU ONE':'PERFECT DAY');
@@ -517,7 +575,7 @@ function currentWindow(now){
   return null;
 }
 function windowHabits(win){
-  return HABITS.filter(x=>x.window===win||x.window==='both');
+  return activeHabits().filter(x=>x.window===win||x.window==='both');
 }
 /* A 'both' habit is stored once per window ('teeth:am'), single-window habits
    keep their bare id — so saves written before windows existed still read
@@ -552,7 +610,7 @@ function claimWindow(win,el,now){
   if(S.claims[k][win]) return false;
   if(!windowProgress(win,now).complete) return false;
   S.claims[k][win]=Date.now();
-  earn('window',el);
+  earn('window',el,null,masteryBonus());   // where the faded cash went
   // the variable reward, on top of the fixed payout — never instead of it
   const sc=rollScratch();
   if(sc.amount>=400) S.stats.jackpot=true;    // the top band came in
@@ -605,7 +663,13 @@ const TRACKS={
   casa:     {nm:'LA CASA',   ic:'🏠', blurb:'The house itself'},
   carro:    {nm:'EL CARRO',  ic:'🚗', blurb:'What you drive'},
   drip:     {nm:'EL DRIP',   ic:'🧢', blurb:'How you show up'},
-  barrio:   {nm:'EL BARRIO', ic:'🏘️', blurb:'The block around you'}
+  barrio:   {nm:'EL BARRIO', ic:'🏘️', blurb:'The block around you'},
+  /* The sixth track exists only because habits stick. Every item is gated on
+     a number of habits that run without you (`m`), and the prices start where
+     the other five end — this is deliberately where the money freed by the
+     automaticity fade goes, so succeeding at the actual point of the app buys
+     you things nothing else in the game can. */
+  maestria: {nm:'MAESTRÍA',  ic:'🎖️', blurb:'What only sticking with it buys'}
 };
 /* Each entry is one purchase. `f` is the S.<track> field it sets to `lv`, so a
    purchase is data — which is what lets step 4 hang a mesh off every one of
@@ -640,7 +704,41 @@ const BARRIO=[
   {id:'awning',   f:'awning',  lv:1, c:4500,  nm:'New colmado awning',       d:'Shade over the whole front'},
   {id:'hoop',     f:'hoop',    lv:1, c:8000,  nm:'Basketball hoop',          d:'The corner gets loud'}
 ];
-const TRACK_ITEMS={casa:CASA, drip:DRIP, barrio:BARRIO};
+/* Two gates, deliberately. `m` counts MASTERED HABITS and opens the early
+   items; `L` counts COMPLETED LINES — a habit taken all the way through its
+   third and hardest tier — and opens the late ones.
+
+   The split exists because the two run out at different times. Masteries come
+   thick and fast through the first two tiers and then stop, so a track gated
+   only on `m` would go quiet exactly when the hardest work starts; the third
+   tier of a line takes months and there has to be something waiting on the
+   other side of it. A gated item is never hidden — it renders locked with what
+   it needs, because a visible thing you cannot have yet is content, and a
+   thing you cannot see is not. */
+const MAESTRIA=[
+  {id:'placa',    f:'placa',    lv:1, m:1, c:2400,  nm:'Placa by the door',         d:'Your name, cast and screwed to the wall'},
+  {id:'banderas', f:'banderas', lv:1, m:2, c:4200,  nm:'Banderitas across the yard',d:'Strung corner to corner, all year'},
+  {id:'jardin',   f:'jardin',   lv:1, m:4, c:7500,  nm:'Raised beds out front',     d:'Things that need you every single day'},
+  {id:'pergola',  f:'pergola',  lv:1, m:7, c:12000, nm:'Pérgola over the galería',  d:'Shade with a frame you had built'},
+  {id:'parrilla', f:'parrilla', lv:1, L:1, c:16000, nm:'Parrilla out back',         d:'A reason for people to come by'},
+  {id:'terraza',  f:'terraza',  lv:1, L:3, c:26000, nm:'Terraza on the roof',       d:'The whole barrio, from up there'},
+  {id:'fuente',   f:'fuente',   lv:1, L:6, c:40000, nm:'Fuente in the yard',        d:'Water running for no reason but that it can'}
+];
+/* A line is complete when its LAST tier is mastered — the habit with no
+   successor left to hand off to. */
+function linesComplete(){
+  return HABITS.filter(h=>!successorOf(h)&&S.mastered[h.id]).length;
+}
+/* What a MAESTRIA item still needs, or null if it is open. One function, so
+   the sheet, the till and contentInventory() can never disagree about a gate. */
+function maestriaLock(it){
+  if(it.m&&masteryCount()<it.m) return {kind:'m', need:it.m, have:masteryCount(),
+    txt:it.m+' habit'+(it.m>1?'s':'')+' running on their own'};
+  if(it.L&&linesComplete()<it.L) return {kind:'L', need:it.L, have:linesComplete(),
+    txt:it.L+' habit'+(it.L>1?'s':'')+' taken all the way to the third tier'};
+  return null;
+}
+const TRACK_ITEMS={casa:CASA, drip:DRIP, barrio:BARRIO, maestria:MAESTRIA};
 
 /* SEGURIDAD and CARRO already had their own ladders (SEC, VEH/MODS) with real
    prices and a deterrence mechanic wired to incidents — they are presented as
@@ -665,14 +763,22 @@ function trackEntries(key){
   const list=TRACK_ITEMS[key]||[];
   return list.filter(it=>(S[key][it.f]||0)<it.lv)
              .map(it=>({track:key,id:it.id,nm:it.nm,d:it.d,c:it.c,s:0,
+                        lock:maestriaLock(it),
                         buy:()=>buyTrackItem(key,it.id)}));
 }
 function allNextEntries(){
   const out=[]; for(const k in TRACKS) trackEntries(k).forEach(e=>out.push(e)); return out;
 }
+/* What you could actually walk up and buy right now. nextGoal() and
+   todaysDeal() both use this rather than allNextEntries(): pointing the
+   progress bar at something a purchase cannot complete would make the floor a
+   lie. The locked ones stay in the sheet, and in contentInventory(). */
+function buyableEntries(){ return allNextEntries().filter(e=>!e.lock); }
 function buyTrackItem(key,id){
   const it=(TRACK_ITEMS[key]||[]).find(x=>x.id===id); if(!it) return false;
   if((S[key][it.f]||0)>=it.lv){ toast('Already yours'); return false; }
+  const lk=maestriaLock(it);
+  if(lk){ toast('Needs '+lk.txt); return false; }
   const price=priceOf({track:key,id:id,c:it.c});
   if(S.cash<price){ toast('Need 💵'+price.toLocaleString()); return false; }
   S.cash-=price; S[key][it.f]=it.lv;
@@ -708,7 +814,7 @@ function priceOf(e){
 function todaysDeal(){
   const k=sessionDay();
   if(S.deal&&S.deal.day===k) return S.deal;
-  const pool=[]; for(const t in TRACKS) trackEntries(t).forEach(e=>{ if(e.c>0) pool.push(e); });
+  const pool=[]; buyableEntries().forEach(e=>{ if(e.c>0) pool.push(e); });
   if(!pool.length){ S.deal={day:k,track:null,id:null,off:0}; save(); return S.deal; }
   const want=pool.filter(e=>e.c>S.cash);
   const pick=(want.length?want:pool)[Math.floor(Math.random()*(want.length||pool.length))];
@@ -720,7 +826,7 @@ function todaysDeal(){
    This is the floor — it only returns null when literally everything is
    bought, which is the endgame's problem, not this function's. */
 function nextGoal(){
-  const all=allNextEntries().filter(e=>S.standing>=(e.s||0));
+  const all=buyableEntries().filter(e=>S.standing>=(e.s||0));
   if(!all.length) return null;
   let best=null;
   all.forEach(e=>{ const p=priceOf(e);
@@ -760,7 +866,8 @@ function rollScratch(){
 const FREEZE_MAX=3, FREEZE_EVERY=10;
 function dayComplete(k){
   const lg=S.log[k]||{};
-  return HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET;
+  // judged by the roster that day ACTUALLY had — see habitActiveOn()
+  return habitsOn(k).every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET;
 }
 function rollDay(){
   const now=sessionDay();
@@ -777,6 +884,7 @@ function rollDay(){
     while(today(d)<now&&guard++<400){
       const k=today(d);
       if(!dayComplete(k)&&!S.covered[k]&&S.freezes>0){ S.freezes--; S.covered[k]=true; }
+      settleAuto(k);      // exactly once per day, ever — see the AUTOMATICITY block
       d.setDate(d.getDate()+1);
     }
   }
@@ -788,6 +896,7 @@ function rollDay(){
   if(st===0&&(S.stats.bestStreak||0)>=20) S.stats.brokeLong=true;
   if(S.stats.brokeLong&&st>=3){ S.stats.rebuilt=true; S.stats.brokeLong=false; }
   S.lastRoll=now; save();
+  checkMastery();
   checkAchievements();
 }
 function grantFreezeIfDue(){
@@ -797,6 +906,206 @@ function grantFreezeIfDue(){
     return true;
   }
   save(); return false;
+}
+
+/* ===================== AUTOMATICITY ========================================
+   This is the number the whole app is actually for. A streak measures whether
+   you turned up; automaticity measures whether you still have to decide to.
+
+   THE CURVE IS THE REAL ONE. Lally et al. (2010) followed 96 people forming a
+   new daily habit and fitted an asymptotic curve to self-reported automaticity:
+   it rises steeply at first, flattens, and reaches ~95% of its plateau at a
+   MEDIAN of 66 days — with an individual range of 18 to 254. So:
+
+       A(n) = 1 - e^(-k*n),  k = 3/66,  giving A(66) = 0.95
+
+   `n` is REPETITIONS, not calendar days, which is the part most habit apps get
+   wrong. Two things follow from the same paper and both are implemented here:
+
+   - A MISSED DAY IS NOT A RESET. Lally found a single missed opportunity had
+     no measurable effect on the trajectory. A miss costs AUTO_MISS (half a
+     rep) and the score never drops below zero. Anything harsher would be
+     inventing psychology to make a game mechanic feel dramatic.
+   - A DAY A FREEZE COVERED IS NEUTRAL. A neighbour covering for you protects
+     the streak, which is a social fact. It cannot make a behaviour more
+     automatic, because you did not do it. So it neither adds nor subtracts.
+
+   The score is SETTLED once per day inside rollDay()'s existing walk (so each
+   day is counted exactly once, ever) and read LIVE with today's rep included,
+   so the bar moves the instant you tap rather than tomorrow morning. */
+const AUTO_PLATEAU_DAYS=66;                 // Lally median; range 18-254
+const AUTO_K=3/AUTO_PLATEAU_DAYS;           // 1-e^(-k*66) = 0.95
+const AUTO_MISS=0.5;                        // a lapse costs half a rep, never a reset
+/* THE HANDOFF POINT IS THE PUBLISHED NUMBER, NOT A ROUNDER ONE. 0.95 is where
+   A(n) puts you at n=66 — the median in the study. An earlier draft used 0.80,
+   which felt reasonable and lands at 35 reps: barely half the evidence, and
+   calling a five-week-old behaviour "automatic" is claiming something the data
+   does not support. Measured at 100% compliance it also finished all 27 habits
+   by day 107, which is the design telling you the threshold is wrong. */
+const AUTO_MASTER=0.95;                     // = 66 clean reps — "runs without you"
+const AUTO_FADE=0.75;                       // how much of the cash fades away at the top
+const MASTERY_BONUS=0.12;                   // what each mastered habit adds to the bonuses
+
+/* Which habits are in the list on a given day. History is judged by the day's
+   OWN roster, never today's: unlocking a successor must not retroactively make
+   last week incomplete and break a streak on the day you succeeded. A habit
+   with no `after` has always been there, so it needs no unlock record and old
+   saves need no migration. */
+function habitActiveOn(h,k){
+  const r=S.retired[h.id];
+  if(r&&r<=k) return false;
+  if(!h.after) return true;
+  const u=S.unlocked[h.id];
+  return !!u&&u<=k;
+}
+function habitsOn(k){ return HABITS.filter(h=>habitActiveOn(h,k)); }
+function activeHabits(){ return habitsOn(sessionDay()); }
+function habitById(id){ return HABITS.find(h=>h.id===id)||null; }
+function successorOf(h){ return HABITS.find(x=>x.after===h.id)||null; }
+
+/* Effective repetitions, settled through S.lastRoll, plus today's live one. */
+function autoReps(h){
+  const lg=S.log[sessionDay()]||{};
+  return (S.auto[h.id]||0)+(habitFullyDone(lg,h)?1:0);
+}
+function automaticity(h){
+  if(typeof h==='string') h=habitById(h);
+  if(!h) return 0;
+  return 1-Math.exp(-AUTO_K*autoReps(h));
+}
+/* Honest translation for the UI: how many clean days this score is worth on
+   the curve. Shown as "≈ 41 of 66 days" rather than a bare percentage,
+   because a percentage of an asymptote means nothing to anybody. */
+function autoDays(h){ return Math.round(Math.min(autoReps(h),AUTO_PLATEAU_DAYS)); }
+
+/* Settle one finished day into every habit that was in that day's roster.
+   Called only from rollDay()'s walk, which visits each day exactly once. */
+function settleAuto(k){
+  if(S.covered[k]) return;                  // a freeze covered it: neutral
+  const lg=S.log[k]||{};
+  habitsOn(k).forEach(h=>{
+    const d=habitFullyDone(lg,h);
+    S.auto[h.id]=Math.max(0,(S.auto[h.id]||0)+(d?1:-AUTO_MISS));
+  });
+}
+
+/* ---- THE FADE -----------------------------------------------------------
+   Cash for a behaviour you already do without thinking is not a reward, it is
+   a liability: the overjustification effect says paying someone for something
+   they'd do anyway REPLACES their own reason for doing it, and then removing
+   the payment leaves them worse off than if you'd never paid. So the payout
+   decays along the same curve the habit is climbing.
+
+   It fades to a floor, not to zero — AUTO_FADE is 0.75, so a habit at the
+   handoff point still pays 40% of base. Zero would read as a punishment for
+   succeeding, and the point is the opposite. The money that comes off here is
+   not deleted: masteryBonus() puts more than it back through the window and
+   perfect-day bonuses, which are paid for turning up rather than for any one
+   named behaviour — a controlling reward becoming an informational one, which
+   is the direction self-determination theory says to move in. */
+function habitPayScale(h){ return 1-AUTO_FADE*automaticity(h); }
+function habitPay(h){ return Math.round(PAY.habit*habitPayScale(h)*mult()); }
+
+/* How the app talks about a habit at its current automaticity. The COPY has to
+   switch with the payout or the fade reads as the game quietly paying you less
+   — the framing moving from transaction to identity is the whole mechanism.
+   Returned as data so the UI and the tests read the same source. */
+function habitFrame(h){
+  if(typeof h==='string') h=habitById(h);
+  const a=automaticity(h), mastered=!!S.mastered[h.id];
+  if(mastered)  return {mode:'identity', band:'mastered', a:a, pay:0,
+                        label:'runs without you', note:'This one is just what you do now.'};
+  if(a>=0.86)   return {mode:'identity', band:'nearly',   a:a, pay:habitPay(h),
+                        label:'nearly automatic', note:'Almost nothing left to decide here.'};
+  if(a>=0.70)   return {mode:'identity', band:'sticking',  a:a, pay:habitPay(h),
+                        label:'this one is sticking', note:'You start it before you think about it.'};
+  if(a>=0.35)   return {mode:'pay',      band:'forming',   a:a, pay:habitPay(h),
+                        label:'settling in',      note:'Getting easier to start.'};
+  return          {mode:'pay',      band:'new',       a:a, pay:habitPay(h),
+                        label:'still new',        note:'Early reps move this the most.'};
+}
+
+/* ---- THE HANDOFF --------------------------------------------------------
+   Crossing AUTO_MASTER does four things, and only the first of them takes
+   anything away:
+     1. the habit retires from the list (you have it; stop logging it)
+     2. it is recorded permanently in S.mastered — it can never be un-earned
+     3. its successor unlocks: a harder version, at zero automaticity, paying
+        FULL rate again
+     4. masteryBonus() rises for good, and one more MAESTRIA item comes into
+        reach
+
+   Both the retirement and the unlock take effect TOMORROW, never today. Today
+   already has a roster and a perfect-day requirement; changing either
+   mid-day could break the day you succeeded on, which is the one thing this
+   design must never do. */
+function nextDay(k){
+  const d=new Date(k+'T12:00:00'); d.setDate(d.getDate()+1); return today(d);
+}
+function checkMastery(){
+  const tmr=nextDay(sessionDay()), out=[];
+  activeHabits().forEach(h=>{
+    if(S.mastered[h.id]) return;
+    if(automaticity(h)<AUTO_MASTER) return;
+    S.mastered[h.id]=sessionDay();
+    S.retired[h.id]=tmr;
+    const nx=successorOf(h);
+    if(nx&&!S.unlocked[nx.id]) S.unlocked[nx.id]=tmr;
+    out.push({habit:h, next:nx});
+  });
+  if(out.length){
+    save();
+    if(typeof onMastery==='function') out.forEach(m=>onMastery(m));
+    checkAchievements();
+  }
+  return out;
+}
+function masteryCount(){ return Object.keys(S.mastered||{}).length; }
+function masteredHabits(){
+  return Object.keys(S.mastered).map(habitById).filter(Boolean);
+}
+/* Where the faded cash goes. Paid on the window bonus and the perfect day —
+   for turning up, not for any one named act. */
+function masteryBonus(){ return 1+MASTERY_BONUS*masteryCount(); }
+/* The habit closest to running on its own, for the headline. */
+function nextToMaster(){
+  let best=null;
+  activeHabits().forEach(h=>{ const a=automaticity(h);
+    if(!best||a>best.a) best={habit:h,a:a}; });
+  return best;
+}
+
+/* ---- CONTENT INVENTORY ---------------------------------------------------
+   The design rule this whole step is built around: SUCCESS MUST OPEN MORE THAN
+   IT CLOSES. `total` is everything that exists and is reachable — it may never
+   fall. `remaining` is what is still ahead of you; buying something is
+   supposed to consume it (that is what buying is FOR), but MASTERING something
+   never may. econ_sim/handoff.js asserts exactly that. */
+function contentInventory(){
+  /* `open` counts what is REACHABLE — a gate that has not opened yet is not
+     content you have, it is content the design still owes you. Counting the
+     whole catalogue from day one would make an unlock register as nothing,
+     which is precisely the thing this inventory exists to detect. Gates only
+     ever open, so `open` can only ever rise: that is the structural guarantee
+     that success never closes a door. */
+  let ownedUp=0, openUp=0;
+  for(const t in TRACKS) (TRACK_ITEMS[t]||[]).forEach(it=>{
+    if(maestriaLock(it)) return;                  // gate still shut
+    openUp++; if((S[t][it.f]||0)>=it.lv) ownedUp++; });
+  for(const k in SEC){ openUp+=SEC[k].t.length-1; ownedUp+=S.security[k]; }
+  openUp+=VEH.length-1; ownedUp+=S.vehicle.tier;
+  for(const c in MODS){ openUp+=MODS[c].length-1; ownedUp+=S.vehicle.mods[c]; }
+  // a habit is reachable once it exists in the list or its parent is mastered
+  const openHab=HABITS.filter(h=>!h.after||S.mastered[h.after]).length, mc=masteryCount();
+  const achTotal=ACHIEVEMENTS.length, achGot=Object.keys(S.achieved||{}).length;
+  return {
+    upgrades:openUp, upgradesLeft:openUp-ownedUp,
+    achievements:achTotal, achievementsLeft:achTotal-achGot,
+    habits:openHab, habitsLeft:openHab-mc,
+    open:openUp+achTotal+openHab,
+    total:openUp+achTotal+openHab,
+    remaining:(openUp-ownedUp)+(achTotal-achGot)+(openHab-mc)
+  };
 }
 
 /* ---- per-habit streaks: which specific habits are actually sticking ---- */
@@ -819,8 +1128,9 @@ function streakWorth(){
 }
 function dailyBaseline(){
   let t=0;
-  HABITS.forEach(h=>t+=PAY.habit*(h.window==='both'?2:1));
-  t+=PAY.water*WATER_TARGET + PAY.diet*DIET_TARGET + PAY.window*2 + PAY.perfect;
+  activeHabits().forEach(h=>t+=PAY.habit*habitPayScale(h)*(h.window==='both'?2:1));
+  const mb=masteryBonus();
+  t+=PAY.water*WATER_TARGET + PAY.diet*DIET_TARGET + (PAY.window*2 + PAY.perfect)*mb;
   t+=comfort();   // a comfortable house is worth a little every day
   return t;
 }
@@ -908,9 +1218,28 @@ const ACHIEVEMENTS=[
    d:'The whole avenue, end to end, no reason.',
    test:()=>(S.stats.aveSpan||0)>=(AVE_Z1-AVE_Z0)*0.9},
 
+  /* ---- the handoff. These are the achievements the app is actually for:
+     every other badge measures what you bought or how long you turned up,
+     these measure the behaviour outliving the game that taught it. ---- */
   {id:'piloto', nm:'PILOTO AUTOMÁTICO', art:'dial',
    d:'One habit that runs without you now. That was the whole idea.',
-   test:()=>HABITS.some(h=>habitStreakFor(h.id)>=66)},
+   test:()=>masteryCount()>=1},
+
+  {id:'sinpensarlo', nm:'SIN PENSARLO', art:'handoff',
+   d:'Three of them, automatic. You stopped deciding a while ago.',
+   test:()=>masteryCount()>=3},
+
+  {id:'relevo', nm:'EL RELEVO', art:'relay',
+   d:'You mastered one, took the harder version, and mastered that too.',
+   test:()=>HABITS.some(h=>h.after&&S.mastered[h.id])},
+
+  {id:'otrapersona', nm:'OTRA PERSONA', art:'mirror',
+   d:'Every habit you started with, running on its own. This is not the same person.',
+   test:()=>HABITS.filter(h=>!h.after).every(h=>!!S.mastered[h.id])},
+
+  {id:'maestro', nm:'CASA DE MAESTRO', art:'crown',
+   d:'Everything only sticking with it could buy. None of it was for sale otherwise.',
+   test:()=>MAESTRIA.every(it=>(S.maestria[it.f]||0)>=it.lv)},
 
   {id:'agua', nm:'AGUA VA', art:'droplet',
    d:'Twenty-five days you actually drank the water.',
@@ -937,6 +1266,10 @@ const ACHIEVEMENTS=[
    test:()=>S.lifetime>=100000},
 
   // ---- hidden: these don't appear until they fire ----
+  {id:'tercernivel', nm:'TERCER NIVEL', art:'ladder', hidden:true,
+   d:'A habit escalated twice and still automatic. Almost nobody gets here.',
+   test:()=>HABITS.some(h=>{const p=habitById(h.after||''); return p&&p.after&&S.mastered[h.id];})},
+
   {id:'trasnochado', nm:'TRASNOCHADO', art:'moon', hidden:true,
    d:'Five nights logged after two in the morning. Nobody is judging.',
    test:()=>(S.stats.lateNight||0)>=5},
