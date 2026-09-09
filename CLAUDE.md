@@ -835,6 +835,80 @@ colmado's speaker, faded by distance in `updateAmbientAudio()`) and
 Browsers block audio until a user gesture, so `initAudio()` is called from
 the ENTER click, and `toggleMute()` resumes a suspended context.
 
+## Every upgrade is visible — and every track does something
+
+**No upgrade may exist that only changes a number.** If it can be bought, it
+can be walked up to and looked at. `visibility.js` asserts exactly this for all
+43 purchasable ids: it builds the world without the upgrade, builds it with,
+and fails if the scene is identical. An upgrade with no mesh, material change
+or size change fails the build.
+
+Two things that test needs to stay honest, both learned by it lying:
+
+- **Seed the RNG before each rebuild.** The scene has deliberate randomness —
+  20 foliage trees, wandering NPCs, palm placement, and `randomFit()`. Without
+  a fixed seed two rebuilds differ every time and the test passes for *any*
+  upgrade including one that renders nothing. It did exactly that once.
+- **The signature must include geometry size and scale, not just position and
+  colour.** A part that grows with a tier sits at the same coordinates; judging
+  by position alone misses it.
+
+Related: `dripFit()` uses `FITS[0]` as its base, deliberately not
+`randomFit()`. The player's character rerolling its outfit on every world entry
+is wrong on its own terms, and it also made a purchased colour impossible to
+tell from a fresh roll landing on the same value.
+
+### The record must carry every track
+
+`emptyUpgrades()` and `homePlotUpgrades()` must list **every** track. CASA,
+DRIP and BARRIO were added to the economy one step after those functions were
+written and rendered nothing at all until they were added, because
+`buildHouse()` and `buildPlotUpgrades()` read the RECORD and never `S`. If you
+add a track, add it in both places or it is invisible no matter how much
+geometry exists for it.
+
+`buildPlotUpgrades(plot,parent)` draws everything from `plot.upgrades`.
+`buildBarrio()` is block-level (it changes the street, not a compound) and
+takes the record for the same reason. `modelCar()` takes the whole vehicle
+record, not a paint string — tint, wheels and tier were invisible whenever the
+OBJ loaded, because `carExtras()` only ran inside the `makeCar()` fallback.
+
+**Prefer geometry to colour for anything that must be visible.** A colour can
+collide with what the base model already uses — the rim tint did, and left two
+purchases undetectable. Car mods each add a real part (hubcaps, sidewall bands,
+sun strip, exhaust, spoiler, sill trim, roof rails) rather than only recolouring.
+
+### What each track actually does
+
+Every track changes something mechanical, or it is set dressing you stop caring
+about. The shape is a **tension**, not five bonuses — two tracks make you more
+of a target and three protect you:
+
+| track | function | effect |
+|---|---|---|
+| SEGURIDAD | `deter()` | beats an incident once it starts |
+| BARRIO | `watch()` | makes incidents rarer and weaker — the only thing that stops them starting |
+| CASA | `comfort()` | softens losses, cheaper repairs, small daily payback |
+| CARRO | `visibility()` | **raises** threat — a nice car gets noticed |
+| DRIP | `respect()` | standing and better scratch odds, but **also raises** `visibility()` |
+
+Drip is deliberately not free: looking like you have something is how you
+become worth robbing.
+
+### Rendering notes
+
+Floodlight and streetlight cones are additive transparent meshes, **never real
+lights** — the toon material sums each light independently and another one
+would push a top-lit face past the white clip described in the rendering
+conventions. Same for car underglow.
+
+`plotGroups` + `cullPlots()` switch off each plot's `detail` subgroup past
+`PLOT_DETAIL_DIST`. Fully upgraded the world is ~2,270 meshes; culling drops
+~1,020 of them from across the map. `clearPropAnims()` and `plotGroups=[]` must
+be reset in `backToTitle()` or the registries keep a dead scene alive.
+Camera sweep and alarm strobe are driven from `tick()` through those
+registries, not per-object callbacks.
+
 ## Known deliberate non-features
 
 - No cloud save / accounts — see Backup above.

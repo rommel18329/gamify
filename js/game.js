@@ -48,11 +48,19 @@ const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-
    Local coordinates here are the historical ones with the old HOME_X removed
    from x, so plot[0] at originX=-16, originZ=0 reproduces the previous world
    exactly — the house still lands at (-16,0,-2), the car at (-5,0,7). */
+/* EVERY track must appear here. A track missing from this record is invisible
+   no matter how much geometry exists for it — casa/drip/barrio were added to
+   the economy a step after this function was written and silently rendered
+   nothing until they were added, because buildHouse() and buildPlotUpgrades()
+   read the RECORD, never S. If you add a track, add it here too. */
 function emptyUpgrades(){
   return {
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     vehicle:{tier:0,mods:{tires:0,wheels:0,tint:0,tune:0},paint:'#6E7B8B'},
-    person:{skin:'#C9884F',outfit:'#2C3242'}
+    person:{skin:'#C9884F',outfit:'#2C3242'},
+    casa:{paint:0,tinaco:0,porch:0,plants:0,dish:0,ac:0,driveway:0,floor2:0},
+    drip:{shirt:0,pants:0,shoes:0,hat:0,chain:0,glasses:0},
+    barrio:{curb:0,light:0,tab:0,bench:0,mural:0,awning:0,hoop:0}
   };
 }
 /* The ONE place my save crosses into the render model. Called from
@@ -61,7 +69,10 @@ function homePlotUpgrades(){
   return {
     security:Object.assign({},S.security),
     vehicle:{tier:S.vehicle.tier,mods:Object.assign({},S.vehicle.mods),paint:S.vehicle.paint},
-    person:Object.assign({},S.person)
+    person:Object.assign({},S.person),
+    casa:Object.assign({},S.casa),
+    drip:Object.assign({},S.drip),
+    barrio:Object.assign({},S.barrio)
   };
 }
 const PLOTS=[
@@ -84,7 +95,8 @@ const PLOTS=[
      Nothing about drawing it knows it isn't mine. */
   {id:'vecino', ownerId:'neighbour-demo', originX:34, originZ:0, rotation:-Math.PI/2,
    upgrades:(function(){ const u=emptyUpgrades();
-     u.security.doors=1; u.security.dog=1; u.security.lights=1;
+     u.security.doors=2; u.security.dog=1; u.security.lights=1;
+     u.casa.paint=1; u.casa.plants=1; u.casa.porch=1;   // their house, their choices
      u.vehicle.paint='#8C5A4A'; return u; })()}
 ];
 function homePlot(){ return PLOTS[0]; }
@@ -346,8 +358,9 @@ function makePerson(outfit,skin,build,opts){
 }
 
 /* ---- car ---- */
-function makeCar(){
-  const tier=S.vehicle.tier, paint=S.vehicle.paint, mods=S.vehicle.mods;
+function makeCar(veh){
+  const v=veh||homePlot().upgrades.vehicle;
+  const tier=v.tier, paint=v.paint, mods=v.mods;
   const g=new THREE.Group();
   const isTruck=tier===3, isSUV=(tier===2||tier===6), isCoupe=(tier===4||tier===5);
   const len=isTruck?5.6:isSUV?5.0:isCoupe?4.4:4.7;
@@ -385,8 +398,86 @@ function makeCar(){
     const hl=new THREE.Mesh(new THREE.SphereGeometry(.17,12,10),new THREE.MeshBasicMaterial({color:0xFFF6D0}));
     hl.scale.set(1,.7,.4); hl.position.set(x,1.05+lo,len/2+.06); g.add(hl);
   });
+  g.userData.tier=tier;
+  carExtras(g,mods,len,hgt,lo);
   g.scale.setScalar(CAR_LENGTH/4.7);   // every dimension above was tuned against a 4.7-unit default tier
   return g;
+}
+
+/* Mods that have to be VISIBLE, not just a line in the garage sheet. Called
+   for the primitive car and again for the loaded model (sized from its own
+   bounding box there), so a tune or a set of wheels changes the silhouette
+   either way. */
+function carExtras(g,mods,len,hgt,lo){
+  const hw=len*0.21;
+  /* Wheels and tyres are expressed as GEOMETRY, not only as a recoloured
+     material. A colour can collide with whatever the base model already uses
+     — the rim tint did exactly that and left two purchases invisible — but an
+     added part cannot. */
+  if(mods.wheels>=1){        // hubcaps
+    const rim=[0x9CA0AC,0xE9E7DA][Math.min(mods.wheels-1,1)];
+    [[-1,1],[1,1],[-1,-1],[1,-1]].forEach(([sx,sz])=>{
+      const cap=M(new THREE.CylinderGeometry(len*0.048,len*0.048,.06,12),rim,{ink:false});
+      cap.rotation.z=Math.PI/2;
+      cap.position.set(sx*hw*1.04, len*0.093+lo, sz*(len/2-len*0.20));
+      g.add(cap);
+    });
+  }
+  if(mods.tires>=1){         // a visible sidewall band per tyre grade
+    const band=[0x2A2E34,0x1A1E24,0x0A0D12][Math.min(mods.tires-1,2)];
+    [[-1,1],[1,1],[-1,-1],[1,-1]].forEach(([sx,sz])=>{
+      const t=M(new THREE.TorusGeometry(len*0.082,len*0.012+mods.tires*0.004,6,14),band,{ink:false});
+      t.rotation.y=Math.PI/2;
+      t.position.set(sx*hw*0.99, len*0.093+lo, sz*(len/2-len*0.20));
+      g.add(t);
+    });
+  }
+  if(g.userData.tier>=1){
+    /* Higher tiers are visibly better cars. Chrome sill trim from the second
+       car, roof rails once you are into the SUV/truck tiers — VEH[0] and
+       VEH[1] are both sedans, so body profile alone left that first upgrade
+       with nothing to look at. */
+    [-1,1].forEach(sx=>{
+      const trim=M(new THREE.BoxGeometry(.05,len*0.018,len*(0.34+g.userData.tier*0.045)),
+        0xC8CBD0,{ink:false});
+      trim.position.set(sx*hw*1.02, len*0.155+lo, 0); g.add(trim);
+    });
+  }
+  if(g.userData.tier>=2){
+    [-1,1].forEach(sx=>{
+      const rail=M(new THREE.BoxGeometry(.07,.07,len*0.42),0x2A2E34,{ink:false});
+      rail.position.set(sx*len*0.075, .86+hgt+lo+.12, -len*0.03); g.add(rail);
+    });
+  }
+  if(mods.tint>=1){          // a sun strip across the top of the windscreen
+    const strip=M(new THREE.BoxGeometry(len*0.30,len*0.028,.05),
+      mods.tint>=2?0x090C10:0x1B2A33,{ink:false});
+    strip.position.set(0,.86+hgt+lo,len*0.13); g.add(strip);
+  }
+  if(mods.tune>=1){          // exhaust — the first thing you hear and see
+    [[-.34],[.34]].forEach(([x])=>{
+      const tip=M(new THREE.CylinderGeometry(.11,.13,.34,10),0xB9B2A2,{ink:false});
+      tip.rotation.x=Math.PI/2; tip.position.set(x,.62+lo,-len/2-.1); g.add(tip);
+    });
+  }
+  if(mods.tune>=2){          // spoiler
+    const wing=M(new THREE.BoxGeometry(1.85,.09,.44),0x14161B,{inkT:.04});
+    wing.position.set(0,.86+hgt+.34+lo,-len/2+.55); g.add(wing);
+    [[-.72],[.72]].forEach(([x])=>{
+      const st=M(new THREE.BoxGeometry(.1,.34,.14),0x14161B,{ink:false});
+      st.position.set(x,.86+hgt+.17+lo,-len/2+.55); g.add(st);
+    });
+  }
+  if(mods.tint>=1){          // plate — small, but it is how a car reads as yours
+    const pl=M(new THREE.BoxGeometry(.86,.3,.05),0xE9E7DA,{ink:false});
+    pl.position.set(0,.72+lo,len/2+.12); g.add(pl);
+  }
+  if(mods.wheels>=2){        // underglow: additive, never a real light
+    const glow=new THREE.Mesh(new THREE.PlaneGeometry(2.4,len*1.02),
+      new THREE.MeshBasicMaterial({color:0x00E5FF,transparent:true,
+        opacity:nightMode?0.34:0.13,blending:THREE.AdditiveBlending,depthWrite:false}));
+    glow.rotation.x=-Math.PI/2; glow.position.set(0,.06+lo,0); g.add(glow);
+  }
 }
 
 /* ---- world ---- */
@@ -532,12 +623,18 @@ function roofKit(g,x,y,z,spanX,spanZ){
    rather than each keeping its own copy of an absolute x. */
 function buildHouse(plot,parent){
   const house=new THREE.Group();
-  const WALL=nightMode?0x8A3F53:0xE86A8A;                  // barrio pink
-  const TRIM=nightMode?0x8C8474:0xE4DCC8;
+  /* The repaint is a real material change, not a number: an unpainted house is
+     the faded barrio pink it started as, a repainted one is fresh turquoise
+     with clean trim. Read from the plot record so a neighbour's house paints
+     independently of yours. */
+  const painted=!!(plot.upgrades.casa&&plot.upgrades.casa.paint);
+  const WALL=painted ? (nightMode?0x1C6058:0x33B3A6) : (nightMode?0x8A3F53:0xE86A8A);
+  const TRIM=painted ? (nightMode?0xA79E88:0xF4F0E2) : (nightMode?0x8C8474:0xE4DCC8);
   const ROOF=nightMode?0x7C7566:0xBFB6A4;
   const body=M(new THREE.BoxGeometry(15,6,11),WALL,{inkT:.014,map:detailMap('wall',4,1)});
   body.position.y=3; house.add(body);
-  const skirt=M(new THREE.BoxGeometry(15.1,1.4,11.1),nightMode?0x5E2434:0x9E3B57,{inkT:.016});
+  const skirt=M(new THREE.BoxGeometry(15.1,1.4,11.1),
+    painted?(nightMode?0x123640:0x1D6B62):(nightMode?0x5E2434:0x9E3B57),{inkT:.016});
   skirt.position.y=.7; house.add(skirt);
 
   // flat roof slab + parapet — DR houses are flat-topped, so there's somewhere to
@@ -874,8 +971,88 @@ function buildLighting(){
    a neighbour's from different numbers. `world.dog`/`world.guard` are only
    captured for my plot, since those are the ones tick() animates and the game
    interacts with. */
-function buildSecurityProps(plot,parent){
-  const sec=plot.upgrades.security;
+/* ---- EVERY UPGRADE, DRAWN FROM THE PLOT RECORD -----------------------------
+   The rule this file lives by: NO UPGRADE MAY EXIST THAT ONLY CHANGES A
+   NUMBER. If it can be bought, it can be walked up to and looked at. There is
+   a test that asserts exactly this for every purchasable id — an upgrade with
+   no mesh, material change or visibility toggle fails the build.
+
+   Everything here reads `plot.upgrades` and never `S`, so a neighbour's
+   compound renders through this same code from their own record. Anything
+   that would need `S` belongs somewhere else.
+
+   Meshes are grouped into `detail` subgroups tagged for distance culling
+   (see cullPlots()): a compound is ~200 meshes before any of this, and the
+   world now holds several. Small repeated pieces pass {ink:false} — an
+   outline on each of forty fence slats reads as noise and doubles the count
+   for nothing. */
+
+// a single fence post/slat helper, shared by every fence tier
+function fenceRun(g,x0,z0,x1,z1,step,fn){
+  const dx=x1-x0, dz=z1-z0, n=Math.max(1,Math.round(Math.hypot(dx,dz)/step));
+  for(let i=0;i<=n;i++) fn(x0+dx*i/n, z0+dz*i/n, i, n);
+}
+/* Fence tiers are genuinely different structures, not one post recoloured:
+   1 chain-link, 2 block wall, 3 block + rejas, 4 block + rejas + razor wire. */
+function buildFence(g,tier){
+  if(tier<1) return;
+  const R=15.5, F=-17.5, L=-11.5, RT=15.5;   // the compound's fence line, plot-local
+  const edges=[[L,RT,RT,RT],[L,F,RT,F],[L,F,L,RT],[RT,F,RT,RT]];
+  const postCol=nightMode?0x4A3A26:0x5A4630;
+  const blockCol=nightMode?0x6E6857:0xA79E88;
+  edges.forEach(([x0,z0,x1,z1])=>{
+    if(tier===1){
+      // chain-link: thin posts and a sagging mesh line
+      fenceRun(g,x0,z0,x1,z1,1.7,(x,z)=>{
+        const p=limb(.07,.09,1.25,postCol,{inkT:.07}); p.position.set(x,.62,z); g.add(p);
+      });
+      const len=Math.hypot(x1-x0,z1-z0);
+      const mesh=M(new THREE.BoxGeometry(len,1.0,.05),nightMode?0x54585E:0x8C919A,
+        {ink:false,map:detailMap('wall',Math.round(len/2),1)});
+      mesh.position.set((x0+x1)/2,.62,(z0+z1)/2);
+      mesh.rotation.y=Math.atan2(x1-x0,z1-z0)+Math.PI/2;
+      g.add(mesh);
+    } else {
+      // block wall — a real masonry run with a capping course
+      const len=Math.hypot(x1-x0,z1-z0), h=tier>=2?1.9:1.25;
+      const wall=M(new THREE.BoxGeometry(len,h,.34),blockCol,
+        {inkT:.016,map:detailMap('wall',Math.max(2,Math.round(len/2.4)),1)});
+      wall.position.set((x0+x1)/2,h/2,(z0+z1)/2);
+      wall.rotation.y=Math.atan2(x1-x0,z1-z0)+Math.PI/2;
+      g.add(wall);
+      const cap=M(new THREE.BoxGeometry(len,.18,.46),nightMode?0x585343:0x8A8069,{ink:false});
+      cap.position.set((x0+x1)/2,h+.09,(z0+z1)/2); cap.rotation.y=wall.rotation.y; g.add(cap);
+      if(tier>=3){
+        // rejas on top of the wall — the barrio standard
+        const bars=rejas(len-.4,1.15,nightMode?0x1E2A32:0x2B3A44,.5);
+        bars.position.set((x0+x1)/2,h+.65,(z0+z1)/2); bars.rotation.y=wall.rotation.y; g.add(bars);
+      }
+      if(tier>=4){
+        // razor wire: a coil of small rings, ink:false or it turns to mush
+        fenceRun(g,x0,z0,x1,z1,0.9,(x,z)=>{
+          const r=M(new THREE.TorusGeometry(.16,.03,5,9),0xB9B2A2,{ink:false});
+          r.position.set(x,h+1.42,z); r.rotation.y=Math.random()*3; g.add(r);
+        });
+      }
+    }
+  });
+  // the gate, always on the street side, wider than a fence panel
+  const gh=tier>=2?2.0:1.4;
+  const gate=(tier>=3)?rejas(3.2,gh,nightMode?0x1E2A32:0x2B3A44,.42)
+                      :M(new THREE.BoxGeometry(3.2,gh,.12),nightMode?0x3A3E46:0x6E7B8B,{inkT:.03});
+  gate.position.set(2,gh/2,RT); g.add(gate);
+  [0.3,3.7].forEach(gx=>{
+    const post=M(new THREE.BoxGeometry(.36,gh+.5,.36),blockCol,{inkT:.04});
+    post.position.set(gx,(gh+.5)/2,RT); g.add(post);
+  });
+}
+
+function buildPlotUpgrades(plot,parent){
+  const up=plot.upgrades, sec=up.security, casa=up.casa||{}, drip=up.drip||{};
+  const detail=new THREE.Group(); detail.userData.lod='detail';   // culled at distance
+  parent.add(detail);
+
+  /* ---- SEGURIDAD ---- */
   if(sec.cameras>0){
     const n=Math.min(4,sec.cameras+1);
     for(let i=0;i<n;i++){
@@ -885,45 +1062,304 @@ function buildSecurityProps(plot,parent){
       const led=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8),new THREE.MeshBasicMaterial({color:0xE63946}));
       led.position.set(.86,.10,0); c.add(led);
       const a=(i/n)*Math.PI*2;
-      c.position.set(Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7); c.rotation.y=-a+Math.PI;
-      parent.add(c);
+      c.position.set(Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7);
+      c.rotation.y=-a+Math.PI;
+      // the sweep: a camera that never moves reads as a prop, not a camera
+      c.userData.sweep={base:-a+Math.PI, phase:i*1.3};
+      detail.add(c); registerSweeper(c);
     }
   }
   if(sec.lights>0){
     const n=Math.min(4,sec.lights);
     for(let i=0;i<n;i++){
+      const px=(i%2?7.9:-7.9), pz=-2+(i<2?5.9:-5.9);
       const L=M(new THREE.SphereGeometry(.32,12,10),0xF0EAD8,{inkT:.05}); L.scale.set(1.4,.8,.8);
-      L.position.set((i%2?7.9:-7.9),5.9,-2+(i<2?5.9:-5.9)); parent.add(L);
-      // the point light is parented alongside the lamp, so it inherits the
-      // plot transform too — copying a local position into a scene-level light
-      // would put it at the wrong place for any plot not at the origin
-      if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.3,24); pl.position.copy(L.position); parent.add(pl); }
+      L.position.set(px,5.9,pz); detail.add(L);
+      /* The visible cone. A floodlight you cannot see the beam of is just a
+         bulb. Additive + transparent so it never darkens what it crosses, and
+         emphatically NOT a real light — the toon material sums each light
+         independently and a fifth one would push a top-lit face past the
+         white clip described in the rendering conventions. */
+      const cone=new THREE.Mesh(new THREE.ConeGeometry(3.1,6.2,14,1,true),
+        new THREE.MeshBasicMaterial({color:0xFFE9A8,transparent:true,
+          opacity:nightMode?0.17:0.07,blending:THREE.AdditiveBlending,
+          depthWrite:false,side:THREE.DoubleSide}));
+      cone.position.set(px*1.18,3.0,pz*1.18);
+      cone.rotation.set(Math.sign(pz)*0.42,0,-Math.sign(px)*0.42);
+      detail.add(cone);
+      if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.3,24); pl.position.copy(L.position); detail.add(pl); }
     }
   }
-  if(sec.alarm>0){ const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05}); ab.position.set(2.4,4.7,5.72); parent.add(ab); }
-  if(sec.doors>0){
-    const fh=.9+sec.doors*.35;
-    const mk=(x,z)=>{ const p=limb(.07,.09,fh,0x5A4630,{inkT:.07}); p.position.set(x,fh/2,z); parent.add(p); };
-    for(let i=-13;i<=13;i+=1.7){ mk(i,15.5); mk(i,-17.5); }
-    for(let i=-15;i<=15;i+=1.7){ mk(-11.5,i-2); mk(15.5,i-2); }
+  if(sec.alarm>0){
+    const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05});
+    ab.position.set(2.4,4.7,5.72); detail.add(ab);
+    const strobe=new THREE.Mesh(new THREE.SphereGeometry(.10,8,8),
+      new THREE.MeshBasicMaterial({color:0xFFD23F}));
+    strobe.position.set(2.4,5.2,5.78); detail.add(strobe);
+    registerBlinker(strobe);
   }
+  buildFence(detail, sec.doors||0);
   if(sec.dog>0){
     const d=new THREE.Group();
-    const b=M(new THREE.SphereGeometry(.5,16,12),0x77502F,{inkT:.035}); b.scale.set(1.5,.85,.8); b.position.y=.72; d.add(b);
+    const bd=M(new THREE.SphereGeometry(.5,16,12),0x77502F,{inkT:.035}); bd.scale.set(1.5,.85,.8); bd.position.y=.72; d.add(bd);
     const h=M(new THREE.SphereGeometry(.32,14,12),0x77502F,{inkT:.04}); h.position.set(.86,1.02,0); d.add(h);
     const sn=M(new THREE.ConeGeometry(.15,.36,10),0x513520,{ink:false}); sn.rotation.z=-Math.PI/2; sn.position.set(1.20,.94,0); d.add(sn);
     [[-.42,.26],[.42,.26],[-.42,-.26],[.42,-.26]].forEach(([x,z])=>{
       const l=limb(.09,.07,.58,0x513520,{inkT:.07}); l.position.set(x,.34,z); d.add(l);
     });
     const t=limb(.07,.04,.55,0x77502F,{inkT:.08}); t.position.set(-.80,.95,0); t.rotation.z=-.8; d.add(t);
-    d.position.set(-6,0,6); parent.add(d);
-    if(plot===homePlot()) world.dog=d;   // tick() patrols this one, in plot-local x
+    d.position.set(-6,0,6); detail.add(d);
+    // the doghouse he patrols away from
+    const kennel=new THREE.Group();
+    const kb=M(new THREE.BoxGeometry(1.5,1.2,1.7),nightMode?0x6B4E33:0x9C7449,{inkT:.03});
+    kb.position.y=.6; kennel.add(kb);
+    const kr=zincRoof(1.9,2.1,nightMode?0x5A5F65:0x8D9299,0); kr.position.y=1.28; kennel.add(kr);
+    const hole=M(new THREE.BoxGeometry(.62,.8,.1),0x141A20,{ink:false});
+    hole.position.set(0,.42,.86); kennel.add(hole);
+    kennel.position.set(-9.2,0,6); kennel.rotation.y=.4; detail.add(kennel);
+    if(plot===homePlot()) world.dog=d;
   }
   if(sec.detail>0){
     const guard=modelPerson()||makePerson(0x1A2028,0xC9884F,.62,{hair:0x14100C});
     guard.position.set(6.5,0,9); guard.rotation.y=-.6;
-    parent.add(guard);
+    detail.add(guard);
     if(plot===homePlot()) world.guard=guard;
+  }
+  if(sec.locks>=1){
+    // a deadbolt and reinforced strike, visible on the door itself
+    const db=M(new THREE.BoxGeometry(.34,.5,.14),nightMode?0x8E8878:0xC0BBAA,{ink:false});
+    db.position.set(.86,2.0,5.80); detail.add(db);
+    const strike=M(new THREE.BoxGeometry(.16,.9,.1),nightMode?0x6E6A62:0x9CA0AC,{ink:false});
+    strike.position.set(1.14,1.9,5.76); detail.add(strike);
+  }
+  if(sec.safe>=1){
+    /* A safe lives indoors and would be the one upgrade you cannot see, which
+       the visibility rule does not allow — so it is a bolted steel cabinet on
+       the galería, which is where these actually end up in a small house. */
+    const sf=new THREE.Group();
+    const bodyS=M(new THREE.BoxGeometry(.9,1.15,.75),nightMode?0x2A3038:0x424A55,{inkT:.04});
+    bodyS.position.y=.58; sf.add(bodyS);
+    const door=M(new THREE.BoxGeometry(.06,1.0,.62),nightMode?0x353C46:0x525C68,{ink:false});
+    door.position.set(.47,.58,0); sf.add(door);
+    const dial=M(new THREE.CylinderGeometry(.11,.11,.06,10),0xC9A227,{ink:false});
+    dial.rotation.z=Math.PI/2; dial.position.set(.52,.62,0); sf.add(dial);
+    sf.position.set(-4.6,0,6.4); sf.rotation.y=.3; detail.add(sf);
+  }
+  // window rejas as their own upgrade, on top of the house's built-in ones
+  if(sec.locks>=2){
+    [[-5,5.62],[5,5.62]].forEach(([x,z])=>{
+      const r=rejas(2.6,2.3,nightMode?0x8E8878:0xC8C2B2,.34);
+      r.position.set(x,3.5,z+0.34); detail.add(r);
+    });
+  }
+
+  /* ---- LA CASA ---- */
+  if(casa.tinaco){
+    const t=new THREE.Group();
+    const tank=M(new THREE.CylinderGeometry(1.05,1.05,1.5,16),nightMode?0x1C3E52:0x2E6B8A,{inkT:.02});
+    tank.position.y=.75; t.add(tank);
+    const lid=M(new THREE.CylinderGeometry(.42,.42,.16,12),nightMode?0x14202A:0x1D4E5E,{ink:false});
+    lid.position.y=1.56; t.add(lid);
+    const leg=M(new THREE.BoxGeometry(2.3,.22,2.3),nightMode?0x5E594D:0x8A8069,{ink:false});
+    leg.position.y=-.1; t.add(leg);
+    t.position.set(-4.4,6.45,-3.0); detail.add(t);
+  }
+  if(casa.dish){
+    const d=new THREE.Group();
+    const bowl=M(new THREE.SphereGeometry(.95,16,10,0,Math.PI*2,0,Math.PI/2.6),0xE4DCC8,{inkT:.03});
+    bowl.rotation.set(-0.9,0,0); bowl.position.y=.9; d.add(bowl);
+    const arm=limb(.05,.05,.85,0x5A6470,{ink:false}); arm.position.set(0,.75,.45); arm.rotation.x=.6; d.add(arm);
+    const mast=limb(.09,.09,.9,0x5A6470,{inkT:.06}); mast.position.y=.45; d.add(mast);
+    d.position.set(5.6,6.35,-4.2); d.rotation.y=-.5; detail.add(d);
+  }
+  if(casa.ac){
+    [[-7.7,3.2],[7.7,-1.0]].forEach(([x,z])=>{
+      const u=M(new THREE.BoxGeometry(.95,.8,.55),nightMode?0x9A958A:0xD8D4C8,{inkT:.04});
+      u.position.set(x,4.3,z); detail.add(u);
+      const gr=M(new THREE.BoxGeometry(.78,.62,.05),nightMode?0x6E6A62:0xA8A49A,{ink:false});
+      gr.position.set(x+Math.sign(x)*0.3,4.3,z); gr.rotation.y=Math.PI/2; detail.add(gr);
+      const br=M(new THREE.BoxGeometry(1.05,.1,.7),0x5A6470,{ink:false});
+      br.position.set(x,3.86,z); detail.add(br);
+    });
+  }
+  if(casa.porch){
+    // two rockers and a small table under the galería
+    [[-2.3,6.5,.5],[2.3,6.5,-.5]].forEach(([x,z,ry])=>{
+      const ch=new THREE.Group();
+      const seat=M(new THREE.BoxGeometry(.95,.12,.9),nightMode?0x6B4E33:0x9C7449,{inkT:.05});
+      seat.position.y=.5; ch.add(seat);
+      const back=M(new THREE.BoxGeometry(.95,.9,.1),nightMode?0x6B4E33:0x9C7449,{inkT:.05});
+      back.position.set(0,.95,-.4); back.rotation.x=-.16; ch.add(back);
+      [[-.4,-.35],[.4,-.35],[-.4,.35],[.4,.35]].forEach(([lx,lz])=>{
+        const l=limb(.05,.05,.5,nightMode?0x4E3925:0x7A5B39,{ink:false});
+        l.position.set(lx,.25,lz); ch.add(l);
+      });
+      ch.position.set(x,0,z); ch.rotation.y=ry; detail.add(ch);
+    });
+    const tbl=M(new THREE.CylinderGeometry(.42,.42,.09,12),nightMode?0x6B4E33:0x9C7449,{inkT:.05});
+    tbl.position.set(0,.62,6.5); detail.add(tbl);
+    const tl=limb(.07,.07,.62,nightMode?0x4E3925:0x7A5B39,{ink:false}); tl.position.set(0,.31,6.5); detail.add(tl);
+  }
+  if(casa.plants){
+    [[-6.6,7.4],[6.6,7.4],[-8.2,2.0],[8.2,2.0]].forEach(([x,z],i)=>{
+      const pot=M(new THREE.CylinderGeometry(.42,.32,.55,10),nightMode?0x7A4A34:0xB5674A,{inkT:.04});
+      pot.position.set(x,.28,z); detail.add(pot);
+      for(let k=0;k<3;k++){
+        const leaf=M(new THREE.SphereGeometry(.42,10,8),nightMode?0x2F4A2C:0x4E7A42,{ink:false});
+        leaf.scale.set(1,.7,1);
+        leaf.position.set(x+(k-1)*.26,.72+k*.16,z+(i%2?.12:-.12)); detail.add(leaf);
+      }
+    });
+  }
+  if(casa.driveway){
+    const dv=M(new THREE.BoxGeometry(6.4,.16,13),nightMode?0x4A4740:0x9E9A90,
+      {ink:false,lift:.05,map:detailMap('wall',3,5)});
+    dv.position.set(11,.08,4); detail.add(dv);
+  }
+  if(casa.floor2){
+    // the second storey the rebar was always waiting for. Must follow the
+    // repaint — a turquoise ground floor under a pink upper storey reads as a
+    // bug, because it is one.
+    const f=new THREE.Group();
+    const WALL=casa.paint ? (nightMode?0x1C6058:0x33B3A6) : (nightMode?0x8A3F53:0xE86A8A);
+    const body=M(new THREE.BoxGeometry(15,4.4,11),WALL,{inkT:.014,map:detailMap('wall',4,1)});
+    body.position.y=2.2; f.add(body);
+    const slab=M(new THREE.BoxGeometry(15.8,.4,11.8),nightMode?0x7C7566:0xBFB6A4,{inkT:.018});
+    slab.position.y=4.55; f.add(slab);
+    const F2TRIM=casa.paint?(nightMode?0xA79E88:0xF4F0E2):(nightMode?0x8C8474:0xE4DCC8);
+    [[-5,5.62],[5,5.62]].forEach(([x,z])=>{
+      const fr=M(new THREE.BoxGeometry(2.7,2.0,.18),F2TRIM,{inkT:.03});
+      fr.position.set(x,2.4,z); f.add(fr);
+      const gl=new THREE.Mesh(new THREE.BoxGeometry(2.3,1.6,.1),
+        new THREE.MeshBasicMaterial({color:nightMode?0xFFD98A:0x24333D}));
+      gl.position.set(x,2.4,z+.06); f.add(gl);
+    });
+    f.position.set(0,6.35,-2); detail.add(f);
+  }
+}
+
+/* ---- EL BARRIO ------------------------------------------------------------
+   Block-level, so it hangs off the world rather than a plot: these are things
+   you paid to change about the street itself, and everyone who walks past sees
+   them. Reads the record it is handed for the same reason everything else
+   does. */
+function buildBarrio(bar){
+  if(!bar) return;
+  const g=new THREE.Group(); g.userData.lod='detail';
+  const colPos=COLMADO_POS;
+  if(bar.curb){
+    // painted kerbstones down the avenue's near edge
+    for(let z=-14;z<=44;z+=3.4){
+      const k=M(new THREE.BoxGeometry(.34,.26,2.6),nightMode?0xB9B2A2:0xF2F0EA,{ink:false,lift:.04});
+      k.position.set(AVE_X-AVE_W/2-.2,.13,z); scene.add(k); g.add(k);
+      const r=M(new THREE.BoxGeometry(.35,.27,1.1),nightMode?0x8A3F53:0xD8412F,{ink:false,lift:.05});
+      r.position.set(AVE_X-AVE_W/2-.2,.13,z+1.7); g.add(r);
+    }
+  }
+  if(bar.light){
+    // the corner streetlight, finally working
+    const pole=limb(.16,.13,7.2,nightMode?0x4A4740:0x6E6A62,{inkT:.05});
+    pole.position.set(AVE_X-AVE_W/2-1.4,3.6,MARG_Z-5); g.add(pole);
+    const arm=M(new THREE.BoxGeometry(2.0,.16,.16),nightMode?0x4A4740:0x6E6A62,{ink:false});
+    arm.position.set(AVE_X-AVE_W/2-0.5,7.1,MARG_Z-5); g.add(arm);
+    const head=M(new THREE.BoxGeometry(1.0,.3,.6),0xE4DCC8,{inkT:.04});
+    head.position.set(AVE_X-AVE_W/2+0.4,6.95,MARG_Z-5); g.add(head);
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(4.2,7.0,14,1,true),
+      new THREE.MeshBasicMaterial({color:0xFFE9A8,transparent:true,
+        opacity:nightMode?0.15:0.05,blending:THREE.AdditiveBlending,
+        depthWrite:false,side:THREE.DoubleSide}));
+    cone.position.set(AVE_X-AVE_W/2+0.4,3.4,MARG_Z-5); g.add(cone);
+    if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.1,30);
+      pl.position.set(AVE_X-AVE_W/2+0.4,6.6,MARG_Z-5); g.add(pl); }
+  }
+  if(bar.mural){
+    // somebody good paints the colmado's side wall
+    const w=M(new THREE.BoxGeometry(.16,3.6,5.4),0xE9E7DA,
+      {ink:false,map:detailMap('wall',2,2)});
+    w.position.set(colPos.x-5.1,2.4,colPos.z);
+    g.add(w);
+    [[0x2FA79B,-1.4,1.0],[0xFFD23F,0.2,1.5],[0xD8412F,1.5,.9],[0x1D4E9C,-0.4,.7]]
+      .forEach(([c,z,r])=>{
+        const blob=M(new THREE.SphereGeometry(r,10,8),c,{ink:false});
+        blob.scale.set(.10,1,1);
+        blob.position.set(colPos.x-5.18,2.4+(r-1)*0.6,colPos.z+z); g.add(blob);
+      });
+  }
+  if(bar.awning){
+    const aw=zincRoof(11.5,4.2,nightMode?0x1C6058:0x2FA79B,-.04);
+    aw.position.set(colPos.x,3.9,colPos.z+4.4); g.add(aw);
+    [-5,5].forEach(x=>{
+      const post=limb(.13,.13,3.9,nightMode?0x4E4A3F:0x8A8069,{inkT:.05});
+      post.position.set(colPos.x+x,1.95,colPos.z+6.3); g.add(post);
+    });
+  }
+  if(bar.bench){
+    const b=new THREE.Group();
+    const seat=M(new THREE.BoxGeometry(3.2,.16,.9),nightMode?0x6B4E33:0x9C7449,{inkT:.04});
+    seat.position.y=.55; b.add(seat);
+    const back=M(new THREE.BoxGeometry(3.2,.8,.12),nightMode?0x6B4E33:0x9C7449,{inkT:.04});
+    back.position.set(0,1.0,-.4); b.add(back);
+    [-1.4,1.4].forEach(x=>{
+      const l=M(new THREE.BoxGeometry(.16,.55,.8),nightMode?0x4A4740:0x6E6A62,{ink:false});
+      l.position.set(x,.28,0); b.add(l);
+    });
+    b.position.set(colPos.x+7.5,0,colPos.z+3.5); b.rotation.y=-.5; g.add(b);
+  }
+  if(bar.hoop){
+    const pole=limb(.19,.16,5.0,nightMode?0x4A4740:0x6E6A62,{inkT:.05});
+    pole.position.set(colPos.x+13,2.5,colPos.z-4); g.add(pole);
+    const board=M(new THREE.BoxGeometry(.14,2.0,3.0),0xE9E7DA,{inkT:.03});
+    board.position.set(colPos.x+12.4,5.4,colPos.z-4); g.add(board);
+    const ring=M(new THREE.TorusGeometry(.52,.07,7,14),0xD8412F,{ink:false});
+    ring.rotation.x=Math.PI/2; ring.position.set(colPos.x+11.8,4.7,colPos.z-4); g.add(ring);
+  }
+  if(bar.tab){
+    // your tab settled: crates stacked out front, the owner glad to see you
+    [[0,0],[1.1,.2],[.5,1.2]].forEach(([dx,dz],i)=>{
+      const cr=M(new THREE.BoxGeometry(.9,.7,.7),
+        [0xD8412F,0xFFD23F,0x2FA79B][i],{inkT:.04});
+      cr.position.set(colPos.x-2.4+dx,.35+(i===2?.7:0),colPos.z+3.6+dz); g.add(cr);
+    });
+  }
+  scene.add(g);
+  return g;
+}
+
+/* ---- animation registries -------------------------------------------------
+   Cameras sweep and the alarm strobe blinks. Both are driven from tick() via
+   these lists rather than each object owning a callback, so backToTitle() can
+   drop the lot in one line and nothing keeps a dead scene alive. */
+let sweepers=[], blinkers=[];
+function registerSweeper(o){ sweepers.push(o); }
+function registerBlinker(o){ blinkers.push(o); }
+function clearPropAnims(){ sweepers=[]; blinkers=[]; }
+function updatePropAnims(t){
+  for(let i=0;i<sweepers.length;i++){
+    const s=sweepers[i], d=s.userData.sweep; if(!d) continue;
+    s.rotation.y=d.base+Math.sin(t*0.5+d.phase)*0.55;
+  }
+  for(let i=0;i<blinkers.length;i++){
+    blinkers[i].visible=(Math.sin(t*4.2)>0.2);
+  }
+}
+
+/* ---- distance culling -----------------------------------------------------
+   A compound is ~200 meshes before upgrades and considerably more after, and
+   the world is built to hold several. Detail groups switch off past
+   PLOT_DETAIL_DIST so walking your own block stays cheap while a neighbour's
+   house two streets over costs almost nothing. Done now rather than
+   discovering the ceiling with four houses in the world. */
+const PLOT_DETAIL_DIST=58;
+let plotGroups=[];
+function cullPlots(camPos){
+  for(let i=0;i<plotGroups.length;i++){
+    const g=plotGroups[i];
+    const d=Math.hypot(g.position.x-camPos.x, g.position.z-camPos.z);
+    const near=d<PLOT_DETAIL_DIST;
+    for(let k=0;k<g.children.length;k++){
+      const c=g.children[k];
+      if(c.userData&&c.userData.lod==='detail') c.visible=near;
+    }
   }
 }
 
@@ -934,7 +1370,8 @@ function buildPlot(plot){
   scene.add(g);
   buildHouse(plot,g);
   buildGarage(plot,g);
-  buildSecurityProps(plot,g);
+  buildPlotUpgrades(plot,g);
+  plotGroups.push(g);
   return g;
 }
 
@@ -966,7 +1403,7 @@ function buildPlot(plot){
 const CAR_SPOT_LOCAL={x:11,z:7};
 function carSpot(plot){ return plotToWorld(plot||homePlot(),CAR_SPOT_LOCAL.x,CAR_SPOT_LOCAL.z); }
 function buildCar(){
-  world.car=modelCar(S.vehicle.paint)||makeCar();
+  world.car=modelCar(homePlot().upgrades.vehicle)||makeCar();
   const cs=carSpot();
   world.car.position.copy(cs); world.car.rotation.y=homePlot().rotation||0;
   scene.add(world.car);
@@ -1199,7 +1636,18 @@ function buildFoliage(){
 /* player */
 function buildPlayer(){
   const per=S.person;
-  playerGroup=modelPerson(FITS[0])||makePerson(0x7C3AED, per.skin, physiqueLocal(), {tank:0xF3F1E7, jean:0x7C3AED, bling:true, shorts:true});
+  /* The player wears what they bought. dripFit() recolours through the same
+     material-name system FITS uses so it lands on the rigged model, and
+     dripAccessories() adds the hat/glasses/chain as geometry so they show up
+     on the makePerson() fallback too — a failed model download must never
+     cost you an upgrade you paid for. Reads the plot record, not S. */
+  const drip=homePlot().upgrades.drip||{};
+  const fit=dripFit(drip);
+  playerGroup=modelPerson(fit)||makePerson(
+    drip.shirt?DRIP_COLS.shirt[Math.min(drip.shirt,2)]:0x7C3AED,
+    per.skin, physiqueLocal(),
+    {tank:0xF3F1E7, jean:drip.pants?DRIP_COLS.pants[1]:0x7C3AED, bling:true, shorts:true});
+  dripAccessories(playerGroup,drip);
   // spawn on the walkway (walk plane spans z 1..13), close enough to the house that the
   // default over-the-shoulder camera (camYaw=PI, ~9.5 units behind the player) settles
   // in open street — at the old z=14 spawn it converged to roughly z=23, which sat
@@ -1246,6 +1694,7 @@ function buildWorld(){
   buildPalms(colPos);
   buildPowerLines();
   buildLighting();
+  buildBarrio(homePlot().upgrades.barrio);
   buildPhysicsWorld();
   buildCar();
   buildVehicle();
@@ -1946,6 +2395,8 @@ function tick(){
   updateAnimated(dt);   // every rigged character, moving or standing
   updateIntruders(dt);
   updateWanderers(dt);
+  updatePropAnims(clock.elapsedTime);
+  cullPlots(camera.position);
   if(controlMode==='walk') checkInteract();
   updateAmbientAudio(followPos);
 
@@ -2135,6 +2586,7 @@ function backToTitle(){
   stopEngineAudio();   // leaving mid-drive must not carry the engine into the title screen
   if(musicGain&&audioCtx) musicGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.2);
   clearAnimated();
+  clearPropAnims(); plotGroups=[];
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   const dhb=document.getElementById('driveHud'); if(dhb) dhb.style.display='none';
   document.getElementById('game').classList.remove('driving');
