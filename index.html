@@ -8,6 +8,12 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0D1117">
 <link rel="stylesheet" href="css/styles.css">
+<!-- Fonts load WITHOUT blocking: media="print" keeps this off the critical
+     path, and onload promotes it once it has arrived. Previously an @import
+     inside styles.css, which stalled every script on the page behind it. -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all';this.onload=null"
+  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
 </head>
 <body>
 
@@ -19,17 +25,28 @@
 
 <div id="boot"><div class="in"><div class="spin"></div><p>Loading</p></div></div>
 
+<!-- THE CORE PATH. This is the default screen and it deliberately does NOT
+     load the 3D world: opening a WebGL scene to tick a checkbox is exactly the
+     friction that kills habit apps. Everything needed to log a window's habits
+     and get paid lives here; the world is one tap away but never required. -->
 <div id="title">
   <div class="t-in">
-    <h1 class="t-name">SPROUT</h1>
-    <p class="t-sub">THE PROPERTY</p>
+    <div id="homeHead"></div>
     <div id="tAlert"></div>
-    <div class="t-stats" id="tStats"></div>
-    <button class="bigbtn" onclick="enterWorld()">ENTER</button>
-    <button class="bigbtn ghost" onclick="openLog()">LOG TODAY</button>
-    <button class="bigbtn ghost" onclick="openBackup()">BACKUP SAVE</button>
+    <div id="homeList"></div>
+    <div id="homeActions">
+      <button class="bigbtn" onclick="enterWorldSafe()">ENTER THE WORLD</button>
+      <div class="hrow">
+        <button class="bigbtn ghost" onclick="openStats()">STATS</button>
+        <button class="bigbtn ghost" onclick="openWindowSettings()">HOURS</button>
+        <button class="bigbtn ghost" onclick="openBackup()">BACKUP</button>
+      </div>
+    </div>
   </div>
 </div>
+
+<!-- the session's ending: what you earned, the streak, and the next appointment -->
+<div id="closeCard"><div class="cc-in" id="closeBody"></div></div>
 
 <div id="game">
   <canvas id="cv"></canvas>
@@ -87,17 +104,24 @@
      carphysics.js is a standalone, THREE-free car physics engine that game.js
      builds a CarPhysics instance from in buildCar() — the fallback if
      vendor/cannon.js (a real rigid-body physics engine) fails to load. -->
+<!-- ORDER MATTERS, and it is not the obvious one.
+     errors.js, data.js and ui.js come FIRST so the core path renders the
+     moment they parse — before ~1MB of Three.js and cannon.js is fetched and
+     compiled. Booting off DOMContentLoaded instead made time-to-interactive
+     ~13s on a mid phone, for a screen whose entire job is to let you tick a
+     checkbox in under a minute. The 3D engine loads behind the already-usable
+     habit list; nothing on the core path touches THREE. -->
 <script src="js/errors.js"></script>
+<script src="js/data.js"></script>
+<script src="js/ui.js"></script>
 <script src="js/vendor/three.min.js"></script>
 <script src="js/vendor/GLTFLoader.js"></script>
 <script src="js/vendor/SkeletonUtils.js"></script>
 <script src="js/vendor/MTLLoader.js"></script>
 <script src="js/vendor/OBJLoader.js"></script>
 <script src="js/vendor/cannon.js"></script>
-<script src="js/data.js"></script>
 <script src="js/carphysics.js"></script>
 <script src="js/models.js"></script>
 <script src="js/game.js"></script>
-<script src="js/ui.js"></script>
 </body>
 </html>

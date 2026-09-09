@@ -1541,6 +1541,38 @@ function updateEngineAudio(speed,throttle,braking){
   if(braking&&speed>4&&Math.random()<0.30)
     noiseHit(t,0.13,1500+Math.random()*900,1.2,0.10,masterGain,'bandpass');
 }
+/* The half-second after a habit tap is the highest-leverage moment in the app:
+   positive affect during a behaviour is what produces lasting automaticity,
+   and a flat repeated blip becomes wallpaper within a week. So the chime
+   climbs the further into a window you are and resolves on the last one —
+   finishing sounds like finishing, not like the tap before it. */
+function habitChime(done,total){
+  if(!audioStarted) initAudio();          // a tap IS the user gesture browsers require
+  if(!audioCtx||audioMuted||!masterGain) return;
+  if(audioCtx.state==='suspended') audioCtx.resume();
+  const t=audioCtx.currentTime+0.01;
+  const frac=total?Math.min(1,done/total):0.5;
+  const root=392;                                   // G4
+  const steps=[0,2,4,5,7,9,11,12];                  // major scale, so it always resolves
+  const semi=steps[Math.min(steps.length-1,Math.round(frac*(steps.length-1)))];
+  const f=root*Math.pow(2,semi/12);
+  [[f,0.20,'triangle'],[f*2,0.10,'sine']].forEach(([hz,vol,type])=>{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type=type; o.frequency.setValueAtTime(hz,t);
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(vol,t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.34);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.36);
+  });
+  if(done>=total&&total){    // the window closing gets a fifth on top
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='triangle'; o.frequency.setValueAtTime(f*1.5,t+0.10);
+    g.gain.setValueAtTime(0.0001,t+0.10);
+    g.gain.exponentialRampToValueAtTime(0.16,t+0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.55);
+    o.connect(g); g.connect(masterGain); o.start(t+0.10); o.stop(t+0.57);
+  }
+}
 function startEngineAudio(){
   if(!audioStarted) initAudio();
   if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();

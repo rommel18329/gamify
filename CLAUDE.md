@@ -84,6 +84,9 @@ field is added. If you remove a field from `blank()`, you don't need to
 migrate anything away — `migrate()` only adds, and stale keys in an old
 save are simply ignored.
 
+Habits are window-scoped — see **The core path** below before changing
+`HABITS`, `toggleHabit()`, or anything that reads `S.log`.
+
 `HABITS` (checkbox list) and `VITALS` (the HUD meters, each driven by one
 or more habits, or by `workout`/`diet`) are the two lists that define what
 the player tracks. If you add a vital, make sure something actually writes
@@ -119,6 +122,91 @@ completing a perfect day would trigger `checkPerfectDay()` again and pay
 the +140 a second time. Any new way to "uncomplete" a day's requirement
 needs to keep going through `checkPerfectDay()`, not reimplement the
 every-habit-plus-water check inline, or it'll bypass this guard.
+
+## The core path (windows, and the two-session loop)
+
+**The default screen is the habit list, and it must never load the 3D world.**
+Opening a WebGL scene to tick a checkbox is the friction that kills habit
+apps, so `#title` is now the core path — open, see this window's habits, tap
+them, get paid, done — and the world is one tap away but never required.
+Measured cold-start: **123 ms to interactive, whole morning window logged in
+6.6 s across 9 taps, zero WebGL contexts created.** If a change pushes any of
+that up, it has broken the point of the screen.
+
+Two load-order facts keep that number, and both are easy to undo by accident:
+
+- **`errors.js`, `data.js` and `ui.js` load BEFORE Three.js and cannon.js**,
+  and `bootHome()` renders immediately rather than waiting for
+  `DOMContentLoaded` (which also waits for those ~1 MB of engine). Nothing on
+  the core path touches `THREE`. `enterWorldSafe()` covers the sliver of time
+  where ENTER exists but `game.js` hasn't parsed.
+- **The webfont is a non-blocking `<link>` in `index.html`, NOT an `@import`
+  in `styles.css`.** A stylesheet with a pending `@import` blocks execution of
+  every script after it — a slow or unreachable `fonts.googleapis.com` held
+  the entire app, habit list included, for as long as the request took to time
+  out. Measured: 12,973 ms → 123 ms from moving it. Never put a remote
+  `@import` back in the stylesheet.
+
+### Windows
+
+`S.windows` holds `{am:{start,end}, pm:{start,end}}` as fractional local hours,
+**user-configurable** (`openWindowSettings()`) because the owner does not keep
+normal hours — a hardcoded window makes the loop unusable. A window whose end
+is at or before its start wraps past midnight; the night window does by
+default (18:00 → 03:00).
+
+**The day boundary is the morning window's start, not midnight** —
+`sessionDay()`. Logging "in bed on time" at 1am is last night's habit. One
+rule, and it makes a wrapping night window behave the way a person expects.
+Everything that records or reads "what happened today" uses `sessionDay()`,
+not `today()`; `today(d)` remains the pure date formatter.
+
+Habits carry `window: 'am' | 'pm' | 'both'`. A `'both'` habit is stored once
+per window under `habitKey()` (`teeth:am`), while single-window habits keep
+their bare id — so **saves written before windows existed still read**, and
+`habitDone()` treats a legacy `true` as satisfying either window. Keep that
+shim; deleting it silently zeroes historical streaks.
+
+- `canLogNow()` is the gate. **There is no retroactive logging** — a closed
+  window is closed, which is what makes the appointment real.
+- `claimWindow()` pays the completion bonus once per window per day, guarded
+  by `S.claims`. A second claim and an out-of-window claim both return false.
+- **ONLY EARNING IS GATED.** Walking, driving, browsing and buying stay
+  available during the lull. Locking someone out of the world is punishment,
+  not anticipation — don't add a gate that does it.
+
+### Pay on the tap
+
+`earn()` fires inside `toggleHabit()`, immediately, per tap. **Never batch a
+window's earnings into a collect step**: the delay between action and reward
+is the thing being optimised, and immediate rewards are what make a behaviour
+automatic fastest. `habitChime()` (in `game.js`, since it uses the audio
+graph) climbs a major scale with how far into the window you are and resolves
+on the last habit, so finishing sounds like finishing — deliberately varied
+because a flat repeated blip becomes wallpaper within a week.
+
+### bindTap(), and why it isn't onclick
+
+`bindTap()` in `ui.js` binds `pointerup`, `touchend`, `mouseup` AND `click`,
+collapsing them with a 350 ms dedupe. That looks like belt-and-braces and
+isn't: **one finger press produces a different event set on different
+engines** — measured here, a tap produced `pointerdown, touchstart,
+mousedown, mouseup` with no `pointerup` and no `click` at all, so rows bound
+to `onclick` did nothing while a scripted `.click()` worked fine. Binding a
+single event silently breaks taps on some engine. Because there's no `click`
+to lean on, scroll-vs-tap is told apart by hand: a pointer that travels more
+than 10 px is a scroll and logs nothing.
+
+Related: **`touch-action` on `html,body` is `manipulation`, not `none`.** A
+blanket `none` (it was there for the 3D drag) stops click synthesis and stops
+a habit list taller than the screen from scrolling. `#game`/`#cv` set their
+own.
+
+### Cues
+
+Every habit ships an `anchor` — a routine cue in words ("right after I
+brush"), rewritable by the player into `S.anchors`. Routine-based cues build
+automaticity better than clock times, which is why none of them are blank.
 
 ## Backup
 

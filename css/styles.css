@@ -1,7 +1,19 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
+/* The webfont @import that used to live here is now a non-blocking <link> in
+   index.html. A stylesheet with a pending @import blocks execution of every
+   script after it, so a slow or unreachable fonts.googleapis.com held the
+   ENTIRE app — the habit list included — for as long as the request took to
+   time out (measured: ~13s in a sandbox where that host is blocked). The core
+   path cannot be hostage to a font. Everything below falls back to a system
+   monospace stack and looks fine without it. */
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+/* touch-action is deliberately NOT `none` here. It used to be, for the 3D
+   canvas's drag-to-look, but a blanket none on the document stops the browser
+   synthesising click from a tap — which silently broke every habit row on the
+   core path (a JS .click() worked, a real finger did not) and stopped a habit
+   list taller than the screen from scrolling. The 3D view sets its own
+   touch-action on #game/#cv where it is actually wanted. */
 html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#0D1117;
-  position:fixed;inset:0;touch-action:none;overscroll-behavior:none;
+  position:fixed;inset:0;touch-action:manipulation;overscroll-behavior:none;
   font-family:'IBM Plex Mono',monospace;color:#E9E7DA;overscroll-behavior:none;}
 :root{
   --ink:#0D1117; --panel:#161C24; --panel2:#1E2630; --line:#2E3844;
@@ -24,7 +36,7 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
 #boot p{margin:0;font-size:11.5px;color:var(--dim);letter-spacing:.06em;}
 
 #title{position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;
-  padding:26px;overflow:hidden;
+  padding:26px;overflow:hidden;touch-action:manipulation;
   background:radial-gradient(circle at 28% 18%,rgba(0,229,255,.10),transparent 55%),
              radial-gradient(circle at 74% 80%,rgba(255,46,136,.10),transparent 55%),#0D1117;}
 #title.show{display:flex;}
@@ -34,7 +46,70 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
   background:repeating-linear-gradient(68deg,rgba(233,231,218,.05) 0 3px,transparent 3px 34px);
   animation:drift 24s linear infinite;}
 @keyframes drift{to{transform:translateX(120px)}}
-.t-in{position:relative;z-index:3;text-align:center;width:100%;max-width:400px;}
+.t-in{position:relative;z-index:3;text-align:left;width:100%;max-width:430px;
+  max-height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;}
+
+/* ---- the core path: default screen, no 3D load ----
+   Rows are big touch targets on purpose. The whole point of this screen is
+   that a window's habits can be logged in under a minute from a cold start,
+   one-handed, in bed — so nothing here should grow a confirmation step, a
+   nested menu, or anything that costs an extra tap. */
+#homeHead{margin-bottom:14px;}
+.hgreet{font-size:clamp(26px,7vw,34px);font-weight:600;letter-spacing:-.02em;line-height:1;
+  text-shadow:2px 0 var(--cyan),-2px 0 var(--mag);}
+.hgreet.lull{text-shadow:none;color:var(--dim);}
+.hsub{font-size:11px;color:var(--dim);margin-top:6px;letter-spacing:.04em;}
+.hbar{height:6px;background:rgba(233,231,218,.12);border-radius:3px;margin:10px 0 8px;overflow:hidden;}
+.hbar i{display:block;height:100%;background:var(--moss);transition:width .35s ease;}
+.hstats{display:flex;gap:12px;font-size:11.5px;color:var(--paper);opacity:.85;
+  font-variant-numeric:tabular-nums;flex-wrap:wrap;}
+
+#homeList{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
+.hrow2{display:flex;align-items:center;gap:11px;cursor:pointer;
+  background:rgba(10,13,20,.55);border:1.5px solid rgba(233,231,218,.16);
+  border-radius:4px;padding:11px 13px;transition:background .12s,border-color .12s,transform .06s;}
+.hrow2:active{transform:scale(.985);}
+.hrow2 .ck{flex:0 0 26px;height:26px;border-radius:3px;border:1.5px solid rgba(233,231,218,.32);
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;}
+.hrow2 .nm{flex:1;font-size:13.5px;line-height:1.3;}
+.hrow2 .cue{display:block;font-size:10px;color:var(--dim);margin-top:3px;letter-spacing:.02em;}
+.hrow2 .tw{font-style:normal;font-size:9px;opacity:.5;margin-left:5px;letter-spacing:.1em;
+  text-transform:uppercase;}
+.hrow2.done{background:rgba(143,174,122,.16);border-color:rgba(143,174,122,.55);}
+.hrow2.done .ck{background:var(--moss);border-color:var(--moss);color:#0D1117;}
+.hrow2.done .nm{opacity:.72;}
+.lullnote{font-size:12.5px;color:var(--dim);line-height:1.6;padding:16px 2px;}
+.row.locked{opacity:.4;cursor:default;}
+.row .tw{font-style:normal;font-size:9px;opacity:.7;letter-spacing:.1em;text-transform:uppercase;}
+
+#homeActions .hrow{display:flex;gap:8px;}
+#homeActions .hrow .bigbtn{flex:1;margin-bottom:0;}
+#homeActions .bigbtn{max-width:none;}
+
+/* window-hours settings */
+.wset{border:1.5px solid var(--line);border-radius:3px;padding:11px 13px;margin-bottom:9px;}
+.wset .wnm{font-size:11px;letter-spacing:.14em;color:var(--moss);margin-bottom:8px;}
+.wset label{display:inline-flex;align-items:center;gap:7px;font-size:12px;margin-right:14px;
+  color:var(--dim);}
+.wset input[type=time]{background:rgba(0,0,0,.35);border:1.5px solid var(--line);
+  color:var(--paper);font-family:inherit;font-size:13px;padding:6px 8px;border-radius:3px;}
+
+/* the session's ending */
+#closeCard{position:fixed;inset:0;z-index:700;display:none;align-items:center;justify-content:center;
+  padding:22px;background:rgba(6,9,13,.9);backdrop-filter:blur(6px);}
+#closeCard.show{display:flex;}
+.cc-in{width:100%;max-width:340px;text-align:center;
+  border:2px solid var(--paper);background:var(--panel);border-radius:3px;padding:24px 20px 20px;
+  box-shadow:6px 6px 0 rgba(143,174,122,.55);}
+.cc-t{font-size:12px;letter-spacing:.2em;color:var(--dim);}
+.cc-b{font-size:44px;font-weight:600;color:var(--moss);line-height:1.05;margin:6px 0 2px;
+  font-variant-numeric:tabular-nums;}
+.cc-s{font-size:10px;color:var(--dim);margin-bottom:16px;line-height:1.5;}
+.cc-rows{display:flex;justify-content:space-between;gap:8px;margin-bottom:16px;}
+.cc-rows div{flex:1;border:1.5px solid var(--line);border-radius:3px;padding:8px 4px;}
+.cc-rows b{display:block;font-size:15px;font-variant-numeric:tabular-nums;}
+.cc-rows span{font-size:8.5px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;}
+.cc-n{font-size:11.5px;color:var(--dim);margin-bottom:16px;}
 .t-name{font-size:clamp(40px,13vw,64px);font-weight:600;letter-spacing:-.03em;line-height:.92;margin:0 0 4px;
   text-shadow:3px 0 var(--cyan),-3px 0 var(--mag),0 4px 0 rgba(0,0,0,.6);}
 .t-sub{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin:0 0 26px;}
