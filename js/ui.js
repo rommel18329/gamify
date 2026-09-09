@@ -60,7 +60,37 @@ function enterWorldSafe(){
 }
 function chime(done,total){ if(typeof habitChime==='function') habitChime(done,total); }
 
+/* What the streak is WORTH, not just how long it is — a number you can feel
+   beats a day count. Framed as a consequence ("you earn X more a day") rather
+   than as payment for compliance. */
+function streakLine(){
+  const w=streakWorth();
+  if(w<=0) return '';
+  return 'Consistency is worth 💵'+w.toLocaleString()+' more a day than starting over.';
+}
+function freezeLine(){
+  if(!S.freezes) return '';
+  return '<div class="frz">🧊 '+S.freezes+' neighbour'+(S.freezes>1?'s owe':' owes')+
+    ' you one — a missed day gets covered</div>';
+}
+/* THE FLOOR, made visible. There is always a next thing and always a bar
+   filling toward it. What is deliberately NOT shown is when it will land:
+   that is uncertain by design, because a reward you can predict stops
+   producing a response at all. */
+function goalLine(){
+  const g=nextGoal();
+  if(!g) return '';
+  const pct=Math.round(g.pct*100);
+  return '<div class="goal" data-goal="1">'+
+    '<div class="gt">'+TRACKS[g.track].ic+' '+g.entry.nm+
+      (g.discounted?'<em class="deal">deal today</em>':'')+'</div>'+
+    '<div class="gbar"><i style="width:'+pct+'%"></i></div>'+
+    '<div class="gs">💵 '+S.cash.toLocaleString()+' of '+g.price.toLocaleString()+
+      ' · '+TRACKS[g.track].nm+'</div></div>';
+}
+
 function renderHome(){
+  rollDay();      // settle yesterday before drawing today
   const win=currentWindow(), k=sessionDay(), lg=S.log[k]||{};
   const head=document.getElementById('homeHead');
   const streak=habitStreak(), m=mult();
@@ -76,7 +106,8 @@ function renderHome(){
       '<div class="hbar"><i style="width:'+Math.round(pr.done/pr.total*100)+'%"></i></div>'+
       '<div class="hstats"><span>💵 '+S.cash.toLocaleString()+'</span>'+
         '<span>🔥 '+streak+'d · '+m.toFixed(2)+'x</span>'+
-        '<span>'+pr.done+'/'+pr.total+'</span></div>';
+        '<span>'+pr.done+'/'+pr.total+'</span></div>'+
+        freezeLine()+goalLine();
   } else {
     const n=nextWindowIn();
     head.innerHTML=
@@ -84,7 +115,8 @@ function renderHome(){
       '<div class="hsub">'+WINDOWS[n.key].nm.toLowerCase()+' opens in '+fmtIn(n.hours)+
         ' — the world is still open</div>'+
       '<div class="hstats"><span>💵 '+S.cash.toLocaleString()+'</span>'+
-        '<span>🔥 '+streak+'d · '+m.toFixed(2)+'x</span></div>';
+        '<span>🔥 '+streak+'d · '+m.toFixed(2)+'x</span></div>'+
+        freezeLine()+goalLine();
   }
 
   const inc=S.incident&&!S.incident.done?S.incident:null;
@@ -128,6 +160,8 @@ function renderHome(){
   list.querySelectorAll('[data-act="water"]').forEach(el=>bindTap(el,()=>onWaterTap(el)));
   list.querySelectorAll('[data-act="meal"]').forEach(el=>bindTap(el,()=>onMealTap(el)));
   list.querySelectorAll('[data-act="workout"]').forEach(el=>bindTap(el,()=>onWorkoutTap(el)));
+  const gl=document.querySelector('#homeHead [data-goal]');
+  if(gl) bindTap(gl,()=>openTracks());
   list.querySelectorAll('[data-anchor]').forEach(el=>{
     // the cue sits inside a habit row, so its own tap must not log the habit
     ['pointerup','touchend','click'].forEach(t=>
@@ -177,11 +211,15 @@ function showCloseCard(win,bonus){
     '<div class="cc-t">'+WINDOWS[win].nm+' DONE</div>'+
     '<div class="cc-b">+'+bonus.toLocaleString()+'</div>'+
     '<div class="cc-s">window bonus · everything else already paid as you tapped</div>'+
+    (S.lastScratch?'<div class="scr'+(S.lastScratch.big?' big':'')+'">'+
+       '🎟️ COLMADO SCRATCH — '+S.lastScratch.nm+
+       '<b>+'+S.lastScratch.amount.toLocaleString()+'</b></div>':'')+
     '<div class="cc-rows">'+
       '<div><b>'+streak+'d</b><span>streak</span></div>'+
       '<div><b>'+mult().toFixed(2)+'x</b><span>earning</span></div>'+
       '<div><b>'+S.cash.toLocaleString()+'</b><span>cash</span></div>'+
     '</div>'+
+    (streakLine()?'<div class="cc-n">'+streakLine()+'</div>':'')+
     (both?'<div class="cc-n">Both windows done today. Nothing else is due.</div>'
         :'<div class="cc-n">'+WINDOWS[n.key].nm.toLowerCase()+' opens in '+fmtIn(n.hours)+'</div>')+
     '<button class="bigbtn" onclick="closeCloseCard()">DONE</button>'+
@@ -189,6 +227,41 @@ function showCloseCard(win,bonus){
   document.getElementById('closeCard').classList.add('show');
 }
 function closeCloseCard(){ document.getElementById('closeCard').classList.remove('show'); }
+
+/* The five tracks. Copy is deliberately informational — what a thing IS and
+   what it changes about the place — never "do X to get Y". Controlling framing
+   crowds out the motivation this whole app depends on; describing a
+   consequence does not. */
+function openTracks(only){
+  const deal=todaysDeal();
+  let html='<div class="note">'+(streakLine()||'Everything here is something you can point at afterwards.')+'</div>';
+  const keys=only?[only]:Object.keys(TRACKS);
+  keys.forEach(k=>{
+    const es=trackEntries(k);
+    html+='<div class="tkh">'+TRACKS[k].ic+' '+TRACKS[k].nm+
+      '<em>'+TRACKS[k].blurb+'</em></div>';
+    if(!es.length){ html+='<div class="tkdone">Nothing left on this one.</div>'; return; }
+    es.slice(0,4).forEach(e=>{
+      const p=priceOf(e), off=p<e.c, can=S.cash>=p&&S.standing>=(e.s||0);
+      html+='<div class="row'+(can?'':' locked')+'" data-buy="'+k+'|'+e.id+'">'+
+        '<div class="nm">'+e.nm+'<span class="cue">'+e.d+'</span></div>'+
+        '<div class="pr'+(off?' off':'')+'">'+
+          (off?'<s>'+e.c.toLocaleString()+'</s> ':'')+'💵'+p.toLocaleString()+
+          (e.s?'<em> ⭐'+e.s+'</em>':'')+'</div></div>';
+    });
+    if(es.length>4) html+='<div class="tkmore">+'+(es.length-4)+' more on this track</div>';
+  });
+  document.getElementById('sheetBody').innerHTML=html;
+  document.querySelectorAll('#sheetBody [data-buy]').forEach(el=>{
+    bindTap(el,()=>{
+      const [tk,id]=el.getAttribute('data-buy').split('|');
+      const e=trackEntries(tk).find(x=>x.id===id);
+      if(!e) return;
+      if(e.buy()===true){ renderVitals(); refreshLogUI(); openTracks(only); }
+    });
+  });
+  openSheet('WHAT YOU\'RE BUILDING — 💵 '+S.cash.toLocaleString());
+}
 
 /* Cues, in the player's own words. Routine anchors ("when I get in bed") build
    automaticity better than clock times, so every habit carries one and this

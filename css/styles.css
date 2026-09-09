@@ -72,7 +72,12 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
 .hrow2 .ck{flex:0 0 26px;height:26px;border-radius:3px;border:1.5px solid rgba(233,231,218,.32);
   display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;}
 .hrow2 .nm{flex:1;font-size:13.5px;line-height:1.3;}
-.hrow2 .cue{display:block;font-size:10px;color:var(--dim);margin-top:3px;letter-spacing:.02em;}
+/* .cue is the second line on any list row — the habit's routine anchor on the
+   core path, the item's description in the track browser. Scoped to .hrow2
+   only at first, which made the track rows read
+   "Deadbolt + reinforced strikeLocks & entry" as one run-on string. */
+.cue{display:block;font-size:10px;color:var(--dim);margin-top:3px;letter-spacing:.02em;
+  line-height:1.4;}
 .hrow2 .tw{font-style:normal;font-size:9px;opacity:.5;margin-left:5px;letter-spacing:.1em;
   text-transform:uppercase;}
 .hrow2.done{background:rgba(143,174,122,.16);border-color:rgba(143,174,122,.55);}
@@ -85,6 +90,40 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
 #homeActions .hrow{display:flex;gap:8px;}
 #homeActions .hrow .bigbtn{flex:1;margin-bottom:0;}
 #homeActions .bigbtn{max-width:none;}
+
+/* the floor, made visible: always a next thing with a bar filling toward it */
+.goal{margin-top:11px;border:1.5px solid rgba(143,174,122,.45);border-radius:4px;
+  padding:9px 11px;background:rgba(143,174,122,.09);cursor:pointer;}
+.goal .gt{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;}
+.goal .deal{font-style:normal;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+  background:var(--yel);color:#0D1117;padding:2px 5px;border-radius:2px;}
+.goal .gbar{height:4px;background:rgba(233,231,218,.14);border-radius:2px;margin:7px 0 5px;overflow:hidden;}
+.goal .gbar i{display:block;height:100%;background:var(--moss);transition:width .4s ease;}
+.goal .gs{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;}
+.frz{margin-top:9px;font-size:10.5px;color:var(--cyan);opacity:.9;}
+
+/* track browser */
+.tkh{font-size:11px;letter-spacing:.14em;color:var(--moss);margin:16px 0 7px;
+  display:flex;align-items:baseline;gap:8px;}
+.tkh:first-child{margin-top:2px;}
+.tkh em{font-style:normal;font-size:10px;color:var(--dim);letter-spacing:.02em;}
+.tkdone{font-size:11px;color:var(--dim);padding:4px 2px 8px;}
+.tkmore{font-size:10px;color:var(--dim);padding:4px 2px 6px;}
+.row .nm{flex:1;line-height:1.35;}
+.row .pr{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto;
+  padding-left:10px;}
+.row .pr s{opacity:.45;font-size:10.5px;}
+.row .pr.off{color:var(--yel);}
+.row .pr em{font-style:normal;font-size:10px;color:var(--dim);}
+#homeActions .bigbtn.wide{margin-bottom:8px;}
+
+/* the scratch reveal on the close card */
+.scr{border:1.5px dashed rgba(233,231,218,.34);border-radius:3px;padding:9px;margin-bottom:14px;
+  font-size:10.5px;letter-spacing:.06em;color:var(--dim);}
+.scr b{display:block;font-size:22px;color:var(--paper);margin-top:3px;letter-spacing:0;
+  font-variant-numeric:tabular-nums;}
+.scr.big{border-color:var(--yel);background:rgba(255,210,63,.12);color:var(--yel);}
+.scr.big b{color:var(--yel);}
 
 /* window-hours settings */
 .wset{border:1.5px solid var(--line);border-radius:3px;padding:11px 13px;margin-bottom:9px;}

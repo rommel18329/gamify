@@ -65,6 +65,14 @@ function blank(){
     windows:{am:{start:4,end:12}, pm:{start:18,end:3}},
     anchors:{},            // habit id -> the player's own cue wording
     claims:{},             // sessionDay -> {am:timestamp, pm:timestamp}
+    casa:{paint:0,tinaco:0,porch:0,plants:0,dish:0,ac:0,driveway:0,floor2:0},
+    drip:{shirt:0,pants:0,shoes:0,hat:0,chain:0,glasses:0},
+    barrio:{curb:0,light:0,tab:0,bench:0,mural:0,awning:0,hoop:0},
+    freezes:0,             // neighbours who owe you one
+    covered:{},            // sessionDay -> a freeze was spent covering it
+    perfectCount:0,        // perfect days ever, drives freeze grants
+    lastRoll:null,         // last sessionDay rollDay() processed
+    deal:null,             // today's discounted item
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
@@ -128,7 +136,10 @@ function habitStreak(){
     const k=today(d), lg=S.log[k]||{};
     // water used to be one of HABITS itself before it became a counter — keep it
     // part of "did everything today" for the streak, same as the perfect-day bonus
-    const all=HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET;
+    // S.covered[k] means a freeze was spent on that day — a neighbour covered
+    // for you, so the streak survives it (see rollDay())
+    const all=S.covered[k] ||
+      (HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET);
     if(all){ miss=0; st++; }
     else if(k!==sessionDay()){ miss++; if(miss>=2) break; }
     d.setDate(d.getDate()-1);
@@ -147,7 +158,14 @@ function workoutStreak(){
   }
   return st;
 }
-function mult(){ return Math.min(1+Math.max(habitStreak(),workoutStreak())*0.05, 2.0); }
+/* 1.0x at day 0 climbing to 2.0x at a 30-day streak, then capped. The cap is
+   load-bearing: an uncapped multiplier outruns every price in the catalogue
+   and collapses the progression floor into "everything at once". */
+const STREAK_TO_DOUBLE=30;
+function mult(){
+  const st=Math.max(habitStreak(),workoutStreak());
+  return Math.min(1+st/STREAK_TO_DOUBLE, 2.0);
+}
 
 /* ---- vitals ---- */
 function vitalLevel(v){
@@ -172,9 +190,17 @@ function vitalLevel(v){
 
 /* ---- earning ---- */
 const PAY={habit:12,workout:35,diet:6,water:2,perfect:140,window:40};
-function earn(kind, el){
-  const p=PAY[kind]; if(!p) return;
-  const m=mult();
+/* `amount` is an optional FLAT override used by windfalls (the colmado
+   scratch): it skips the streak multiplier, because a windfall is not earned
+   effort and multiplying it would make a long streak swing the variance
+   wildly. It still moves through here so this stays the ONLY path money
+   takes. A flat earn is never unearned — unearn() recomputes PAY[kind]*mult()
+   and could not mirror an arbitrary amount, and windfalls are not undoable
+   anyway. */
+function earn(kind, el, amount){
+  const flat=(amount!=null);
+  const p=flat?amount:PAY[kind]; if(!p) return;
+  const m=flat?1:mult();
   const c=Math.round(p*m);
   S.cash+=c; S.lifetime+=c;
   let sTxt='';
@@ -278,8 +304,13 @@ function checkPerfectDay(el){
   if(S.perfectDone[k]) return;
   // a 'both' habit counts only when BOTH windows logged it — habitFullyDone()
   if(HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET){
-    S.perfectDone[k]=true; save();
-    setTimeout(()=>{ earn('perfect', el); toast('PERFECT DAY'); impact('PERFECT!'); },320);
+    S.perfectDone[k]=true;
+    const got=grantFreezeIfDue();
+    save();
+    setTimeout(()=>{
+      earn('perfect', el); impact('PERFECT!');
+      toast(got?'PERFECT DAY — A NEIGHBOUR OWES YOU ONE':'PERFECT DAY');
+    },320);
   }
 }
 
@@ -320,13 +351,20 @@ const SEC={
 };
 function deter(){ let d=0; for(const k in SEC) d+=SEC[k].t[S.security[k]].d*(S.cond[k]/100); return Math.round(d); }
 function safeProt(){ return SEC.safe.t[S.security.safe].p||.05; }
-function buySec(k){
+/* `price` lets today's deal actually apply. Without it priceOf() would show a
+   discount the purchase then refused to honour — the shown price and the
+   charged price MUST come from the same place, and they briefly did not.
+   Returns whether it happened, so a caller can tell a refusal from a success
+   instead of assuming. */
+function buySec(k,price){
   const cur=S.security[k], nx=SEC[k].t[cur+1];
-  if(!nx){ toast('Top tier'); return; }
-  if(S.standing<nx.s){ toast('Need ⭐'+nx.s); return; }
-  if(S.cash<nx.c){ toast('Need 💵'+nx.c.toLocaleString()); return; }
-  S.cash-=nx.c; S.security[k]=cur+1; S.cond[k]=100;
+  if(!nx){ toast('Top tier'); return false; }
+  const cost=(price!=null)?price:nx.c;
+  if(S.standing<nx.s){ toast('Need \u2b50'+nx.s); return false; }
+  if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
+  S.cash-=cost; S.security[k]=cur+1; S.cond[k]=100;
   ev('Installed: '+nx.nm,'win'); save(); impact('INSTALLED'); renderSecurity(); rebuildProps();
+  return true;
 }
 function serviceAll(){
   let cost=0;
@@ -354,19 +392,23 @@ const MODS={
   tune:[{nm:'Stock',c:0},{nm:'Intake + exhaust',c:2100},{nm:'ECU tune',c:4800},{nm:'Built motor',c:16000}]
 };
 const PAINTS=['#6E7B8B','#E63946','#0A0D10','#E9E7DA','#00E5FF','#8FAE7A','#FFD23F','#7B2CBF'];
-function buyVeh(){
-  const nx=VEH[S.vehicle.tier+1]; if(!nx){ toast('Top of the ladder'); return; }
-  if(S.standing<nx.s){ toast('Need ⭐'+nx.s); return; }
-  if(S.cash<nx.c){ toast('Need 💵'+nx.c.toLocaleString()); return; }
-  S.cash-=nx.c; S.vehicle.tier++; S.vehicle.mods={tires:0,wheels:0,tint:0,tune:0};
+function buyVeh(price){
+  const nx=VEH[S.vehicle.tier+1]; if(!nx){ toast('Top of the ladder'); return false; }
+  const cost=(price!=null)?price:nx.c;
+  if(S.standing<nx.s){ toast('Need \u2b50'+nx.s); return false; }
+  if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
+  S.cash-=cost; S.vehicle.tier++; S.vehicle.mods={tires:0,wheels:0,tint:0,tune:0};
   ev('Bought: '+nx.nm,'win'); save(); impact('DELIVERED'); renderGarage(); rebuildCar();
+  return true;
 }
-function buyMod(cat,i){
-  const m=MODS[cat][i];
-  if(S.vehicle.mods[cat]>=i){ toast('Already installed'); return; }
-  if(S.cash<m.c){ toast('Need 💵'+m.c.toLocaleString()); return; }
-  S.cash-=m.c; S.vehicle.mods[cat]=i;
+function buyMod(cat,i,price){
+  const m=MODS[cat][i]; if(!m) return false;
+  if(S.vehicle.mods[cat]>=i){ toast('Already installed'); return false; }
+  const cost=(price!=null)?price:m.c;
+  if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
+  S.cash-=cost; S.vehicle.mods[cat]=i;
   ev('Installed: '+m.nm,'win'); save(); impact('INSTALLED'); renderGarage(); rebuildCar();
+  return true;
 }
 
 /* ---- visibility & incidents ---- */
@@ -483,7 +525,12 @@ function claimWindow(win,el,now){
   if(S.claims[k][win]) return false;
   if(!windowProgress(win,now).complete) return false;
   S.claims[k][win]=Date.now();
-  earn('window',el); save();
+  earn('window',el);
+  // the variable reward, on top of the fixed payout — never instead of it
+  const sc=rollScratch();
+  S.lastScratch=sc;
+  earn('window',el,sc.amount);
+  save();
   return true;
 }
 function windowClaimed(win,now){
@@ -512,4 +559,229 @@ function setAnchor(id,text){
   const t=(text||'').trim().slice(0,60);
   if(t) S.anchors[id]=t; else delete S.anchors[id];
   save();
+}
+
+/* ===================== PROGRESSION ECONOMY =====================
+   FIVE PARALLEL TRACKS, priced so the cheapest unowned thing across all of
+   them is usually close. One linear ladder always produces a wall — you stare
+   at the same unaffordable number for a week and stop caring. Five tracks at
+   staggered prices never do, because there is always a cheap thing pending on
+   some other track while you save for an expensive one.
+
+   Prices are staggered ACROSS tracks on purpose: DRIP is the cheap track
+   (120-7,000), BARRIO and CASA the middle, SEGURIDAD spans everything, and
+   CARRO is the long haul. If the pacing runs dry, ADD UPGRADES — never inflate
+   the habit payout, which would devalue everything already bought. */
+const TRACKS={
+  seguridad:{nm:'SEGURIDAD', ic:'🔒', blurb:'What keeps the place yours'},
+  casa:     {nm:'LA CASA',   ic:'🏠', blurb:'The house itself'},
+  carro:    {nm:'EL CARRO',  ic:'🚗', blurb:'What you drive'},
+  drip:     {nm:'EL DRIP',   ic:'🧢', blurb:'How you show up'},
+  barrio:   {nm:'EL BARRIO', ic:'🏘️', blurb:'The block around you'}
+};
+/* Each entry is one purchase. `f` is the S.<track> field it sets to `lv`, so a
+   purchase is data — which is what lets step 4 hang a mesh off every one of
+   them and what lets a plot record render someone else's house. */
+const CASA=[
+  {id:'paint',    f:'paint',   lv:1, c:260,   nm:'Repaint the front',        d:'Fresh colour on the street face'},
+  {id:'tinaco',   f:'tinaco',  lv:1, c:620,   nm:'Tinaco on the roof',       d:'Water when the street supply cuts'},
+  {id:'porch',    f:'porch',   lv:1, c:900,   nm:'Furnish the galería',      d:'Somewhere to actually sit'},
+  {id:'plants',   f:'plants',  lv:1, c:1400,  nm:'Plants in the yard',       d:'The place stops looking empty'},
+  {id:'dish',     f:'dish',    lv:1, c:2200,  nm:'Satellite dish',           d:'The game comes to you'},
+  {id:'ac',       f:'ac',      lv:1, c:3800,  nm:'Air conditioning',         d:'Two units, front and back'},
+  {id:'drive',    f:'driveway',lv:1, c:6500,  nm:'Pave the driveway',        d:'No more dust up the steps'},
+  {id:'floor2',   f:'floor2',  lv:1, c:18000, nm:'Second floor shell',       d:'The rebar finally gets used'}
+];
+const DRIP=[
+  {id:'tee',      f:'shirt',   lv:1, c:120,   nm:'Fresh tee',                d:'Clean and yours'},
+  {id:'jeans',    f:'pants',   lv:1, c:240,   nm:'Jeans that fit',           d:'Actually your size'},
+  {id:'cap',      f:'hat',     lv:1, c:300,   nm:'Fitted cap',               d:'Sun off your face'},
+  {id:'shades',   f:'glasses', lv:1, c:380,   nm:'Sunglasses',               d:'For the walk to the colmado'},
+  {id:'kicks',    f:'shoes',   lv:1, c:420,   nm:'Clean sneakers',           d:'People notice shoes first'},
+  {id:'chain',    f:'chain',   lv:1, c:900,   nm:'Gold chain',               d:'Small, but it catches light'},
+  {id:'kicks2',   f:'shoes',   lv:2, c:1800,  nm:'The good sneakers',        d:'The ones you actually wanted'},
+  {id:'fit',      f:'shirt',   lv:2, c:3200,  nm:'A full fit',               d:'Head to toe, on purpose'},
+  {id:'piece',    f:'chain',   lv:2, c:7000,  nm:'Statement piece',          d:'Nobody misses it'}
+];
+const BARRIO=[
+  {id:'curb',     f:'curb',    lv:1, c:180,   nm:'Paint the curb',           d:'The block looks cared for'},
+  {id:'light',    f:'light',   lv:1, c:340,   nm:'Fix the streetlight',      d:'The corner stops being dark'},
+  {id:'tab',      f:'tab',     lv:1, c:700,   nm:'Settle your colmado tab',  d:'You get greeted differently'},
+  {id:'bench',    f:'bench',   lv:1, c:1100,  nm:'Bench on the corner',      d:'The dominoes move outside'},
+  {id:'mural',    f:'mural',   lv:1, c:2600,  nm:'Mural on the wall',        d:'Somebody good paints it'},
+  {id:'awning',   f:'awning',  lv:1, c:4500,  nm:'New colmado awning',       d:'Shade over the whole front'},
+  {id:'hoop',     f:'hoop',    lv:1, c:8000,  nm:'Basketball hoop',          d:'The corner gets loud'}
+];
+const TRACK_ITEMS={casa:CASA, drip:DRIP, barrio:BARRIO};
+
+/* SEGURIDAD and CARRO already had their own ladders (SEC, VEH/MODS) with real
+   prices and a deterrence mechanic wired to incidents — they are presented as
+   tracks rather than rebuilt, so nothing that depends on them regresses. */
+function trackEntries(key){
+  if(key==='seguridad'){
+    const out=[];
+    for(const k in SEC){ const nx=SEC[k].t[S.security[k]+1];
+      if(nx) out.push({track:'seguridad',id:k,nm:nx.nm,d:SEC[k].nm,c:nx.c,s:nx.s||0,
+        buy:function(){ return buySec(k,priceOf(this)); }}); }
+    return out;
+  }
+  if(key==='carro'){
+    const out=[]; const nx=VEH[S.vehicle.tier+1];
+    if(nx) out.push({track:'carro',id:'veh',nm:nx.nm,d:'The next car',c:nx.c,s:nx.s||0,
+      buy:function(){ return buyVeh(priceOf(this)); }});
+    for(const cat in MODS){ const i=S.vehicle.mods[cat]+1, m=MODS[cat][i];
+      if(m) out.push({track:'carro',id:cat+i,nm:m.nm,d:cat,c:m.c,s:0,
+        buy:function(){ return buyMod(cat,i,priceOf(this)); }}); }
+    return out;
+  }
+  const list=TRACK_ITEMS[key]||[];
+  return list.filter(it=>(S[key][it.f]||0)<it.lv)
+             .map(it=>({track:key,id:it.id,nm:it.nm,d:it.d,c:it.c,s:0,
+                        buy:()=>buyTrackItem(key,it.id)}));
+}
+function allNextEntries(){
+  const out=[]; for(const k in TRACKS) trackEntries(k).forEach(e=>out.push(e)); return out;
+}
+function buyTrackItem(key,id){
+  const it=(TRACK_ITEMS[key]||[]).find(x=>x.id===id); if(!it) return false;
+  if((S[key][it.f]||0)>=it.lv){ toast('Already yours'); return false; }
+  const price=priceOf({track:key,id:id,c:it.c});
+  if(S.cash<price){ toast('Need 💵'+price.toLocaleString()); return false; }
+  S.cash-=price; S[key][it.f]=it.lv;
+  ev(it.nm+' — done','win'); save(); impact('DONE');
+  if(typeof rebuildProps==='function') rebuildProps();
+  return true;
+}
+
+/* ---- A FLOOR, NOT A CADENCE ----------------------------------------------
+   There must ALWAYS be a visible next thing with a bar filling toward it —
+   that is the floor. What there must NOT be is a predictable "something every
+   N days" schedule: a reward you can see coming produces no prediction error
+   and therefore no response, and steady predictable reinforcement measurably
+   flattens out. So the FLOOR is guaranteed and the TIMING is not.
+
+   Uncertainty comes from three places, none of which touch the base habit
+   payout — random core pay reads as unfair and destroys trust in the loop:
+     - the colmado scratch after each completed window (variable, occasionally
+       a real hit),
+     - a different item discounted every day, which changes WHICH thing is
+       next and therefore when it lands,
+     - incident losses already in the game.
+   ------------------------------------------------------------------------ */
+function priceOf(e){
+  const d=todaysDeal();
+  if(d&&d.track===e.track&&d.id===e.id) return Math.max(1,Math.round(e.c*(1-d.off)));
+  return e.c;
+}
+/* One item is cheaper today. Rolled once per session day and stored, so it
+   does not reshuffle on every render — and picked from what you can't yet
+   afford, so it actually moves something within reach rather than
+   discounting what you were going to buy anyway. */
+function todaysDeal(){
+  const k=sessionDay();
+  if(S.deal&&S.deal.day===k) return S.deal;
+  const pool=[]; for(const t in TRACKS) trackEntries(t).forEach(e=>{ if(e.c>0) pool.push(e); });
+  if(!pool.length){ S.deal={day:k,track:null,id:null,off:0}; save(); return S.deal; }
+  const want=pool.filter(e=>e.c>S.cash);
+  const pick=(want.length?want:pool)[Math.floor(Math.random()*(want.length||pool.length))];
+  const off=[0.2,0.25,0.3,0.35,0.4][Math.floor(Math.random()*5)];
+  S.deal={day:k,track:pick.track,id:pick.id,off:off}; save();
+  return S.deal;
+}
+/* The cheapest thing you don't own yet, across every track, at today's price.
+   This is the floor — it only returns null when literally everything is
+   bought, which is the endgame's problem, not this function's. */
+function nextGoal(){
+  const all=allNextEntries().filter(e=>S.standing>=(e.s||0));
+  if(!all.length) return null;
+  let best=null;
+  all.forEach(e=>{ const p=priceOf(e);
+    if(!best||p<best.price) best={entry:e,price:p,track:e.track,
+      discounted:p<e.c, pct:Math.min(1,S.cash/Math.max(1,p))}; });
+  return best;
+}
+
+/* ---- the colmado scratch: the variable reward ----
+   Fires after a window is completed, never on the base payout. Mostly small,
+   occasionally a real hit — unpredictable size is the mechanic doing the
+   work, and anticipation is strongest when the outcome is genuinely in doubt.
+   Paid FLAT (no streak multiplier): it is a windfall, not earned effort, and
+   multiplying it would make a long streak swing the variance wildly. */
+const SCRATCH=[
+  {p:0.58, lo:15,  hi:35,  nm:'a few pesos back'},
+  {p:0.27, lo:40,  hi:85,  nm:'a decent hit'},
+  {p:0.12, lo:120, hi:220, nm:'a good one'},
+  {p:0.03, lo:400, hi:900, nm:'EL PREMIO GORDO'}
+];
+function rollScratch(){
+  let r=Math.random(), acc=0;
+  for(const b of SCRATCH){ acc+=b.p; if(r<acc)
+    return {amount:Math.round(b.lo+Math.random()*(b.hi-b.lo)), nm:b.nm, big:b.lo>=120}; }
+  const b=SCRATCH[0];
+  return {amount:Math.round(b.lo+Math.random()*(b.hi-b.lo)), nm:b.nm, big:false};
+}
+
+/* ---- streak freeze: a neighbour covered for you ----
+   Earned, never bought, roughly one per 10 perfect days, hold at most 3, and
+   applied automatically. This exists because harsher streak punishment makes
+   people quit permanently rather than try harder — a missed day must never
+   destroy forty days of work. rollDay() is the ONLY thing that spends one, so
+   habitStreak() stays a pure read that can be called every render. */
+const FREEZE_MAX=3, FREEZE_EVERY=10;
+function dayComplete(k){
+  const lg=S.log[k]||{};
+  return HABITS.every(h=>habitFullyDone(lg,h)) && (S.water[k]||[]).length>=WATER_TARGET;
+}
+function rollDay(){
+  const now=sessionDay();
+  if(S.lastRoll===now) return;
+  if(S.lastRoll&&S.lastRoll<now){
+    /* Start at lastRoll ITSELF, not the day after. lastRoll is the last day
+       that was still in progress when we last looked; now that the day has
+       rolled over it is finished and is exactly the day most likely to need
+       covering. Starting a day later skipped it, so a freeze was never spent
+       on the one miss it exists for — the streak broke with three freezes
+       sitting unused. Ends before `now`, which is still being worked on. */
+    const d=new Date(S.lastRoll+'T12:00:00');
+    let guard=0;
+    while(today(d)<now&&guard++<400){
+      const k=today(d);
+      if(!dayComplete(k)&&!S.covered[k]&&S.freezes>0){ S.freezes--; S.covered[k]=true; }
+      d.setDate(d.getDate()+1);
+    }
+  }
+  S.lastRoll=now; save();
+}
+function grantFreezeIfDue(){
+  S.perfectCount=(S.perfectCount||0)+1;
+  if(S.perfectCount%FREEZE_EVERY===0&&S.freezes<FREEZE_MAX){
+    S.freezes++; save();
+    return true;
+  }
+  save(); return false;
+}
+
+/* ---- per-habit streaks: which specific habits are actually sticking ---- */
+function habitStreakFor(id){
+  const h=HABITS.find(x=>x.id===id); if(!h) return 0;
+  let st=0, d=new Date();
+  for(let i=0;i<400;i++){
+    const k=today(d), lg=S.log[k]||{};
+    if(habitFullyDone(lg,h)) st++;
+    else if(k!==sessionDay()) break;      // today still being worked on
+    d.setDate(d.getDate()-1);
+  }
+  return st;
+}
+/* What the streak is worth in cash right now, not just how long it is —
+   a number you can feel is more motivating than a day count. */
+function streakWorth(){
+  const base=dailyBaseline();
+  return Math.round(base*mult()-base);
+}
+function dailyBaseline(){
+  let t=0;
+  HABITS.forEach(h=>t+=PAY.habit*(h.window==='both'?2:1));
+  t+=PAY.water*WATER_TARGET + PAY.diet*DIET_TARGET + PAY.window*2 + PAY.perfect;
+  return t;
 }

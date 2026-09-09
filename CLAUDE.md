@@ -208,6 +208,85 @@ Every habit ships an `anchor` — a routine cue in words ("right after I
 brush"), rewritable by the player into `S.anchors`. Routine-based cues build
 automaticity better than clock times, which is why none of them are blank.
 
+## The progression economy
+
+**Five parallel tracks**, `TRACKS` in `js/data.js`: SEGURIDAD, LA CASA, EL
+CARRO, EL DRIP, EL BARRIO. Prices are staggered **across** tracks, not within
+one — DRIP is the cheap track (120–7,000), CASA and BARRIO the middle,
+SEGURIDAD spans everything, CARRO is the long haul. One linear ladder always
+produces a wall you stare at for a week; five never do, because something
+cheap is always pending on another track while you save.
+
+Measured at a fresh save: **37 things buyable, 💵120 to 💵18,000, 15 of them
+under 500.** If pacing runs dry, **add upgrades — never inflate the habit
+payout**, which devalues everything already bought.
+
+SEGURIDAD and CARRO wrap the pre-existing `SEC` / `VEH` / `MODS` ladders
+rather than replacing them, so the deterrence mechanic and the garage don't
+regress. `trackEntries(key)` normalises all five into one shape; `CASA`,
+`DRIP` and `BARRIO` are plain data whose `f`/`lv` fields set `S.<track>.<f>`,
+which is what lets step 4 hang a mesh off every purchase.
+
+### A floor, not a cadence
+
+`nextGoal()` returns the cheapest unowned thing across every track at today's
+price — **that is the floor, and it is guaranteed**. What is deliberately NOT
+guaranteed is *when* it lands: a reward you can predict produces no prediction
+error and therefore no response, and steady predictable reinforcement
+measurably flattens out. Do not add an "affordable every N days" schedule.
+
+Uncertainty comes from three places, none of which touch the base habit
+payout — **random core pay reads as unfair and destroys trust in the loop**:
+
+- `rollScratch()`, the colmado scratch after each completed window. Mostly
+  small, ~15% a real hit. Paid **flat**, no streak multiplier: it's a windfall,
+  not earned effort, and multiplying it would make a long streak swing the
+  variance wildly.
+- `todaysDeal()` discounts one item per session day, picked from what you
+  **can't yet afford**, so it moves something into reach rather than
+  discounting what you were buying anyway. Rolled once and stored, or it would
+  reshuffle on every render.
+- Incident losses, already in the game.
+
+**The shown price and the charged price must come from the same place.**
+`priceOf()` applies the deal, and `buySec`/`buyVeh`/`buyMod` take a `price`
+argument so it actually applies at the till — they briefly didn't, which made
+the discount a lie on two of five tracks and spun a purchase loop forever.
+They also return true/false now so a caller can tell a refusal from a success.
+
+Simulated over 120 days at 100/80/60% compliance: the floor never once
+empties, and time-to-next-unlock stays genuinely spread — 8–11 distinct gap
+lengths, mean 2.3–3.2 days, ranging same-day to 12 days. Re-run
+`econ_sim.js` after any price change.
+
+### Streaks and the freeze
+
+`mult()` is `1 + streak/STREAK_TO_DOUBLE` capped at **2.0x at 30 days**. The
+cap is load-bearing: an uncapped multiplier outruns every price in the
+catalogue and collapses the floor into "everything at once".
+`streakWorth()` shows what the streak is worth **in cash per day** rather than
+as a day count. `habitStreakFor(id)` tracks each habit separately.
+
+**The freeze is earned, never bought** — one per 10 perfect days
+(`grantFreezeIfDue()`), hold at most 3, applied automatically. It exists
+because harsher streak punishment makes people quit permanently rather than
+try harder; a missed day must never destroy forty days of work.
+
+`rollDay()` is the **only** thing that spends a freeze, so `habitStreak()`
+stays a pure read safe to call every render. It walks from `S.lastRoll`
+**inclusive** — starting a day later skipped the one day most likely to need
+covering, so freezes piled up to the cap while the streak broke anyway. A
+covered day is recorded in `S.covered[k]` and `habitStreak()` treats it as
+complete. Verified in simulation: at 80% compliance a 116-day streak survives
+across 10 covered days; at 60% it correctly does not.
+
+### Copy
+
+All reward copy is **informational** — what a thing is and what it changes
+about the place — never "do X to get Y". Controlling framing crowds out the
+intrinsic motivation this whole app depends on; describing a consequence does
+not. Keep new copy on that side of the line.
+
 ## Backup
 
 `localStorage` is the *only* copy of a save — there's no server. `exportSave()`/
