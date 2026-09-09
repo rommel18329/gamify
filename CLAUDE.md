@@ -212,15 +212,16 @@ automaticity better than clock times, which is why none of them are blank.
 
 ## The progression economy
 
-**Five parallel tracks**, `TRACKS` in `js/data.js`: SEGURIDAD, LA CASA, EL
-CARRO, EL DRIP, EL BARRIO. Prices are staggered **across** tracks, not within
+**Six parallel tracks**, `TRACKS` in `js/data.js`: SEGURIDAD, LA CASA, EL
+CARRO, EL DRIP, EL BARRIO, and MAESTRÍA (which is bought with habits, not
+money — see Automaticity below). Prices are staggered **across** tracks, not within
 one — DRIP is the cheap track (120–7,000), CASA and BARRIO the middle,
 SEGURIDAD spans everything, CARRO is the long haul. One linear ladder always
 produces a wall you stare at for a week; five never do, because something
 cheap is always pending on another track while you save.
 
 Measured at a fresh save: **37 things buyable, 💵120 to 💵18,000, 15 of them
-under 500.** If pacing runs dry, **add upgrades — never inflate the habit
+under 500** (MAESTRÍA's seven sit behind habit gates on top of that). If pacing runs dry, **add upgrades — never inflate the habit
 payout**, which devalues everything already bought.
 
 SEGURIDAD and CARRO wrap the pre-existing `SEC` / `VEH` / `MODS` ladders
@@ -281,6 +282,118 @@ covering, so freezes piled up to the cap while the streak broke anyway. A
 covered day is recorded in `S.covered[k]` and `habitStreak()` treats it as
 complete. Verified in simulation: at 80% compliance a 116-day streak survives
 across 10 covered days; at 60% it correctly does not.
+
+## Automaticity, the fade, and the handoff
+
+This is what the app is actually for. Everything above it — streaks, cash,
+five upgrade tracks — is scaffolding around the one number in `js/data.js`
+that measures whether a behaviour still needs the game.
+
+### The curve is the published one
+
+`automaticity(h)` is `1 - e^(-k·n)` with `k = 3/66`, so `A(66) = 0.95` —
+the median from Lally et al. (2010), whose individual range was 18 to 254
+days. `n` is **repetitions, not calendar days**, which is the part most habit
+apps get wrong. Two consequences, both from the same paper, both load-bearing:
+
+- **A missed day is not a reset.** Lally found a single missed opportunity had
+  no measurable effect on the trajectory. A miss costs `AUTO_MISS` (half a
+  rep) and the score floors at zero. Anything harsher would be inventing
+  psychology to make a mechanic feel dramatic.
+- **A day a freeze covered is neutral.** It protects the streak, which is a
+  social fact; it cannot make a behaviour automatic, because you didn't do it.
+
+`AUTO_MASTER` is **0.95, not a rounder number**. An earlier draft used 0.80,
+which sounds reasonable and lands at 35 reps — barely half the evidence.
+Measured at 100% compliance it also finished all 27 habits by day 107; at 0.95
+the same run masters at days 65 / 131 / 197, one tier at a time. If mastery
+ever starts arriving in weeks, that threshold is wrong again.
+
+The score is **settled once per day inside `rollDay()`'s existing walk**
+(`settleAuto(k)`), so each day counts exactly once ever, and read **live**
+with today's rep included, so the bar moves on the tap rather than tomorrow.
+
+### The fade, and where the money goes
+
+`habitPayScale(h)` is `1 - AUTO_FADE·A`. Paying for something you'd now do
+anyway is the overjustification effect: it replaces your own reason for doing
+it, and then withdrawing the payment leaves you worse off than never paying.
+So the payout decays along the curve — 💵12 new, 💵3 at the top. It fades to a
+**floor, not zero**; zero reads as a punishment for succeeding.
+
+`earn(kind, el, amount, scale)` takes the scale as a fourth argument so the
+fade reaches the single money path rather than becoming a second one.
+`unearn()` mirrors it. **`toggleHabit()` reads the scale ONCE, before it
+touches the log** — computing it after the mutation gives the log branch and
+the undo branch different numbers (the undo one always larger), and tapping a
+habit on and off paid out the difference every time. That was a live exploit.
+
+The money taken off does not vanish: `masteryBonus()` is
+`1 + 0.12·masteryCount()` on the **window bonus and the perfect day** — paid
+for turning up, not for any one named act. A controlling reward becoming an
+informational one, which is the direction SDT says to move in. Simulated over
+200 days, daily income *rises* as habits stick (421 → 785 at full compliance).
+
+`habitFrame(h)` returns the band, the label and the mode (`'pay'` /
+`'identity'`) as data, so the row, the sheet and the tests read one source. The
+copy has to switch with the payout or the fade just reads as the game quietly
+paying you less.
+
+### The handoff — and why nothing may shrink
+
+Crossing `AUTO_MASTER` does four things and only the first takes anything away:
+the habit **retires from the list**, it is recorded permanently in
+`S.mastered`, its **successor unlocks** (a harder version at zero automaticity,
+paying full rate again), and `masteryBonus()` plus one more `MAESTRIA` gate
+open for good.
+
+A successor **replaces** its parent rather than sitting beside it. Once
+brushing your teeth is automatic, ticking a box for it is theatre; asking for
+two timed minutes is the same behaviour escalated. It also keeps the daily list
+at ~9 items instead of growing to 27, and it is why habit income *recovers* on
+every handoff instead of collapsing.
+
+**Both the retirement and the unlock take effect TOMORROW** (`nextDay()`).
+Today already has a roster and a perfect-day requirement; changing either
+mid-day could break the day you succeeded on, which is the one thing this
+design must never do. For the same reason **history is judged by the roster the
+day actually had** — `habitActiveOn(h,k)` / `habitsOn(k)`, keyed on
+`S.unlocked` / `S.retired`. A habit with no `after` needs no unlock record, so
+old saves need no migration. `dayComplete()`, `habitStreak()` and
+`checkPerfectDay()` all go through these; using bare `HABITS` in any of them
+retroactively breaks streaks on the day a successor unlocks.
+
+`contentInventory()` counts what is **REACHABLE**, not the catalogue. Counting
+a shut gate from day one makes an unlock register as nothing, which is exactly
+what this inventory exists to detect — it did, in the first draft. Gates only
+ever open, so `open` can only rise: measured 106 → 131 across 200 days. Buying
+consumes content (that is what buying is for); **mastering never does**, while
+the habit tree still has depth. Mastering the third tier of a line ends that
+line and is reported honestly rather than asserted away. Re-run
+`scratchpad/handoff.js` after touching any of this.
+
+### MAESTRÍA
+
+The sixth track, gated on habits rather than money — `TRACKS.maestria`,
+prices 2,400–40,000, where the freed economy goes. **Two gates**, because they
+run out at different times: `m` counts mastered habits and opens the early
+items; `L` counts completed lines (a habit taken through all three tiers) and
+opens the late ones, so the track doesn't go quiet exactly when the hardest
+work starts. `maestriaLock(it)` is the single source — the sheet, the till and
+`contentInventory()` cannot disagree about a gate. **A gated item renders
+locked with what it needs, never hidden**: a thing you can see and can't have
+yet is content; a thing you can't see is nothing. `buyableEntries()` (not
+`allNextEntries()`) feeds `nextGoal()` and `todaysDeal()`, or the progress bar
+would point at something a purchase can't complete.
+
+All seven are real geometry, each in its own group tagged `userData.mst` —
+which is what lets `scratchpad/probe_maestria.js` ask where a purchase landed
+and whether it overlaps anything, instead of a human guessing camera angles.
+It found two real clashes (banderitas threaded through the pérgola's slats, the
+fountain clipping its corner). Related: **stop `requestAnimationFrame` before
+setting a camera for a screenshot** — `tick()` lerps the camera back toward its
+own ideal every frame, so a shot taken 300 ms after positioning photographs the
+default angle. Three shots came out that way before this was noticed.
 
 ### Copy
 
@@ -841,7 +954,7 @@ the ENTER click, and `toggleMute()` resumes a suspended context.
 
 **No upgrade may exist that only changes a number.** If it can be bought, it
 can be walked up to and looked at. `visibility.js` asserts exactly this for all
-43 purchasable ids: it builds the world without the upgrade, builds it with,
+50 purchasable ids: it builds the world without the upgrade, builds it with,
 and fails if the scene is identical. An upgrade with no mesh, material change
 or size change fails the build.
 
@@ -864,7 +977,8 @@ tell from a fresh roll landing on the same value.
 
 `emptyUpgrades()` and `homePlotUpgrades()` must list **every** track. CASA,
 DRIP and BARRIO were added to the economy one step after those functions were
-written and rendered nothing at all until they were added, because
+written and rendered nothing at all until they were added, and MAESTRÍA had to
+go in both places for the same reason, because
 `buildHouse()` and `buildPlotUpgrades()` read the RECORD and never `S`. If you
 add a track, add it in both places or it is invisible no matter how much
 geometry exists for it.
@@ -893,6 +1007,7 @@ of a target and three protect you:
 | CASA | `comfort()` | softens losses, cheaper repairs, small daily payback |
 | CARRO | `visibility()` | **raises** threat — a nice car gets noticed |
 | DRIP | `respect()` | standing and better scratch odds, but **also raises** `visibility()` |
+| MAESTRÍA | `masteryBonus()` | multiplies the window and perfect-day bonuses — where the automaticity fade's money goes |
 
 Drip is deliberately not free: looking like you have something is how you
 become worth robbing.

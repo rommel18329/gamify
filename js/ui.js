@@ -77,6 +77,131 @@ function freezeLine(){
    filling toward it. What is deliberately NOT shown is when it will land:
    that is uncertain by design, because a reward you can predict stops
    producing a response at all. */
+/* ---- THE HEADLINE ---------------------------------------------------------
+   This sits above the goal bar, i.e. above the money. That ordering is the
+   whole argument of the app: what you are actually accumulating is behaviour
+   that no longer needs the game, and the cash is scaffolding around it. It is
+   shown HONESTLY — the real curve, the real day count, and the plateau it is
+   measured against — rather than a flattering percentage. */
+function autoLine(){
+  const mc=masteryCount(), nx=nextToMaster();
+  if(!nx) return '';
+  const pct=Math.round(nx.a*100);
+  const head=mc>0
+    ? '<b>'+mc+'</b> habit'+(mc>1?'s':'')+' running without you'
+    : 'Nothing runs without you yet';
+  const sub=mc>0
+    ? 'closest of the rest: '+nx.habit.nm.toLowerCase()
+    : 'closest: '+nx.habit.nm.toLowerCase();
+  return '<div class="auto" data-auto="1">'+
+    '<div class="at">🧠 '+head+'</div>'+
+    '<div class="abar"><i style="width:'+pct+'%"></i>'+
+      '<u style="left:'+Math.round(AUTO_MASTER*100)+'%"></u></div>'+
+    '<div class="as">'+sub+' · '+autoDays(nx.habit)+' of '+AUTO_PLATEAU_DAYS+
+      ' days on the curve</div></div>';
+}
+/* Which tier of its line a habit is — 1 for an original, 2 for a successor. */
+function habitTier(h){ let t=1,c=h; while(c&&c.after){ t++; c=habitById(c.after); } return t; }
+
+/* ---- LO QUE YA ES TUYO ----------------------------------------------------
+   The full picture: every habit still in the list against the curve, and the
+   permanent shelf of the ones that came off it. The shelf is the point — it is
+   the only screen in the game that only ever grows. */
+function openAutomaticity(){
+  const mc=masteryCount(), lines=linesComplete();
+  let html='<div class="note">A habit is not a streak. This is the curve from '+
+    'Lally 2010 — repetitions, not days, plateauing around '+AUTO_PLATEAU_DAYS+
+    ' for most people (some in 18, some in 254). A missed day costs half a rep '+
+    'and never resets it.</div>';
+
+  html+='<div class="tkh wrap">🧠 STILL BUILDING<em>still a decision</em></div>';
+  const live=activeHabits().slice().sort((a,b)=>automaticity(b)-automaticity(a));
+  live.forEach(h=>{
+    const f=habitFrame(h), pct=Math.round(f.a*100);
+    html+='<div class="arow">'+
+      '<div class="nm">'+h.ic+' '+h.nm+
+        (h.after?'<em class="tw t2">tier '+habitTier(h)+'</em>':'')+
+        '<span class="cue">'+f.note+'</span></div>'+
+      '<div class="acurve"><i class="'+f.band+'" style="width:'+pct+'%"></i>'+
+        '<u style="left:'+Math.round(AUTO_MASTER*100)+'%"></u></div>'+
+      '<div class="apc"><b>'+pct+'%</b><span>'+autoDays(h)+'/'+AUTO_PLATEAU_DAYS+
+        'd · 💵'+f.pay+'</span></div></div>';
+  });
+
+  html+='<div class="tkh wrap">🎖️ RUNS WITHOUT YOU<em>'+
+    (mc?'with or without the game':'nothing here yet')+'</em></div>';
+  if(!mc){
+    html+='<div class="tkdone">The first one lands around day '+AUTO_PLATEAU_DAYS+
+      '. When it does, that habit leaves the list for good and a harder version of '+
+      'it takes its place.</div>';
+  } else {
+    masteredHabits().sort((a,b)=>habitTier(a)-habitTier(b)).forEach(h=>{
+      html+='<div class="arow done"><div class="nm">'+h.ic+' '+h.nm+
+        (h.after?'<em class="tw t2">tier '+habitTier(h)+'</em>':'')+
+        '<span class="cue">since '+S.mastered[h.id]+'</span></div>'+
+        '<div class="amast">✓</div></div>';
+    });
+  }
+
+  /* What the fade paid for. Shown as a number, because "the game pays you less
+     now" needs an answer standing next to it or it just reads as a takeaway. */
+  html+='<div class="note tight">Every habit that comes off that list takes its '+
+    'payout with it — you do not need paying for something you already do. '+
+    'That money moves here instead: <b>'+masteryBonus().toFixed(2)+'x</b> on every '+
+    'window bonus and every perfect day'+
+    (mc?', worth about 💵'+Math.round((PAY.window*2+PAY.perfect)*(masteryBonus()-1))+
+        ' a day you would not otherwise have':'')+
+    '. And '+lines+' of 9 lines taken all the way to tier three.</div>';
+  document.getElementById('sheetBody').innerHTML=html;
+  openSheet('LO QUE YA ES TUYO');
+}
+
+/* ---- the handoff announcement ----
+   data.js raises this the moment a habit crosses; the DOM stays here. It gets
+   its own card rather than a toast because it is the biggest thing that
+   happens in the app, and because it has to explain the trade in words: what
+   is leaving, what is arriving, and what opened. */
+/* #closeCard is a single element and BOTH the window-close card and this one
+   want it. A mastery fires from inside toggleHabit(), i.e. before afterLog()
+   runs, so without a queue the window card would silently overwrite the
+   biggest moment in the app half a second after it appeared. */
+let cardQueue=[];
+function pushCard(render){
+  cardQueue.push(render);
+  if(cardQueue.length===1) cardQueue[0]();
+}
+function closeCloseCard(){
+  document.getElementById('closeCard').classList.remove('show');
+  cardQueue.shift();
+  if(cardQueue.length) setTimeout(()=>cardQueue[0](),260);
+}
+onMastery=function(m){ pushCard(()=>renderMasteryCard(m)); };
+function renderMasteryCard(m){
+  const h=m.habit, nx=m.next;
+  const el=document.getElementById('closeBody');
+  if(!el) return;
+  const opened=MAESTRIA.filter(it=>!maestriaLock(it)&&(S.maestria[it.f]||0)<it.lv);
+  el.innerHTML=
+    '<div class="cc-t">'+h.nm.toUpperCase()+' RUNS WITHOUT YOU</div>'+
+    '<div class="cc-b small">'+Math.round(autoReps(h))+' reps</div>'+
+    '<div class="cc-s">It comes off the list tomorrow. You will keep doing it; '+
+      'you just do not need the game for it anymore.</div>'+
+    (nx?'<div class="hand"><span>NEW TOMORROW</span><b>'+nx.ic+' '+nx.nm+'</b>'+
+        '<em>Starts at zero on the curve — and pays full rate again.</em></div>'
+       :'<div class="hand"><span>THAT LINE IS FINISHED</span><b>'+h.ic+' all three tiers</b>'+
+        '<em>There is nothing harder to hand this one off to.</em></div>')+
+    '<div class="cc-rows">'+
+      '<div><b>'+masteryCount()+'</b><span>automatic</span></div>'+
+      '<div><b>'+masteryBonus().toFixed(2)+'x</b><span>on bonuses</span></div>'+
+      '<div><b>'+linesComplete()+'/9</b><span>lines done</span></div>'+
+    '</div>'+
+    (opened.length?'<div class="cc-n">MAESTRÍA opened: '+
+       opened.map(o=>o.nm).join(' · ')+'</div>':'')+
+    '<button class="bigbtn" onclick="closeCloseCard();renderHome()">GOOD</button>'+
+    '<button class="bigbtn ghost" onclick="closeCloseCard();renderHome();openAutomaticity()">SEE THE REST</button>';
+  document.getElementById('closeCard').classList.add('show');
+}
+
 function goalLine(){
   const g=nextGoal();
   if(!g) return '';
@@ -107,7 +232,7 @@ function renderHome(){
       '<div class="hstats"><span>💵 '+S.cash.toLocaleString()+'</span>'+
         '<span>🔥 '+streak+'d · '+m.toFixed(2)+'x</span>'+
         '<span>'+pr.done+'/'+pr.total+'</span></div>'+
-        freezeLine()+goalLine();
+        autoLine()+freezeLine()+goalLine();
   } else {
     const n=nextWindowIn();
     head.innerHTML=
@@ -116,7 +241,7 @@ function renderHome(){
         ' — the world is still open</div>'+
       '<div class="hstats"><span>💵 '+S.cash.toLocaleString()+'</span>'+
         '<span>🔥 '+streak+'d · '+m.toFixed(2)+'x</span></div>'+
-        freezeLine()+goalLine();
+        autoLine()+freezeLine()+goalLine();
   }
 
   const inc=S.incident&&!S.incident.done?S.incident:null;
@@ -130,12 +255,27 @@ function renderHome(){
 
   let html='';
   windowHabits(win).forEach(h=>{
-    const done=habitDone(lg,h,win);
+    const done=habitDone(lg,h,win), f=habitFrame(h);
+    /* THE AUTOMATICITY BAR IS ON THE ROW, not buried in a stats screen. It is
+       the only number here that measures the thing the app is for, so it sits
+       where you look every single day. The right-hand column switches with it:
+       a cash figure while the habit is still new, the word for where it has
+       got to once it is not. See habitFrame() in data.js. */
     html+='<div class="hrow2'+(done?' done':'')+'" data-habit="'+h.id+'">'+
       '<div class="ck">'+(done?'✓':'')+'</div>'+
       '<div class="nm">'+h.ic+' '+h.nm+
         (h.window==='both'?'<em class="tw">'+WINDOWS[win].nm.toLowerCase()+'</em>':'')+
-        '<span class="cue" data-anchor="'+h.id+'">'+anchorFor(h)+' ✎</span></div></div>';
+        (h.after?'<em class="tw t2">tier '+habitTier(h)+'</em>':'')+
+        '<span class="cue" data-anchor="'+h.id+'">'+anchorFor(h)+' ✎</span>'+
+        '<span class="autow"><i class="autob '+f.band+'" style="width:'+
+          Math.round(f.a*100)+'%"></i></span>'+
+        '<span class="autol '+f.band+'">'+f.label+' · '+autoDays(h)+'/'+
+          AUTO_PLATEAU_DAYS+' days</span>'+
+      '</div>'+
+      '<div class="hpay '+f.mode+'">'+(f.mode==='pay'
+        ? '💵'+f.pay
+        : '<span class="idw">'+Math.round(f.a*100)+'%</span><em>💵'+f.pay+'</em>')+
+      '</div></div>';
   });
   // counters — both windows accept them, they just fill toward one daily target
   const cups=(S.water[k]||[]).length, cupsDone=cups>=WATER_TARGET;
@@ -162,6 +302,8 @@ function renderHome(){
   list.querySelectorAll('[data-act="workout"]').forEach(el=>bindTap(el,()=>onWorkoutTap(el)));
   const gl=document.querySelector('#homeHead [data-goal]');
   if(gl) bindTap(gl,()=>openTracks());
+  const al=document.querySelector('#homeHead [data-auto]');
+  if(al) bindTap(al,()=>openAutomaticity());
   list.querySelectorAll('[data-anchor]').forEach(el=>{
     // the cue sits inside a habit row, so its own tap must not log the habit
     ['pointerup','touchend','click'].forEach(t=>
@@ -199,7 +341,8 @@ function afterLog(win){
   const before=S.cash;
   if(!claimWindow(win,document.getElementById('homeHead'))) return;
   renderHome();
-  setTimeout(()=>showCloseCard(win,S.cash-before),420);
+  const gained=S.cash-before;
+  setTimeout(()=>pushCard(()=>showCloseCard(win,gained)),420);
 }
 
 /* The loop must have an ending — this is it. What you earned, where the streak
@@ -226,7 +369,9 @@ function showCloseCard(win,bonus){
     '<button class="bigbtn ghost" onclick="closeCloseCard();enterWorldSafe()">SPEND IT</button>';
   document.getElementById('closeCard').classList.add('show');
 }
-function closeCloseCard(){ document.getElementById('closeCard').classList.remove('show'); }
+/* closeCloseCard() lives up by pushCard() — it has to advance the card queue,
+   and a second plain definition down here would hoist over it and strand
+   whatever was queued behind. */
 
 /* The five tracks. Copy is deliberately informational — what a thing IS and
    what it changes about the place — never "do X to get Y". Controlling framing
@@ -242,9 +387,14 @@ function openTracks(only){
       '<em>'+TRACKS[k].blurb+'</em></div>';
     if(!es.length){ html+='<div class="tkdone">Nothing left on this one.</div>'; return; }
     es.slice(0,4).forEach(e=>{
-      const p=priceOf(e), off=p<e.c, can=S.cash>=p&&S.standing>=(e.s||0);
-      html+='<div class="row'+(can?'':' locked')+'" data-buy="'+k+'|'+e.id+'">'+
-        '<div class="nm">'+e.nm+'<span class="cue">'+e.d+'</span></div>'+
+      const p=priceOf(e), off=p<e.c, can=!e.lock&&S.cash>=p&&S.standing>=(e.s||0);
+      /* A gated item renders WITH what it needs rather than being hidden. A
+         thing you can see and cannot have yet is content; a thing you cannot
+         see is nothing. */
+      html+='<div class="row'+(can?'':' locked')+(e.lock?' gated':'')+
+        '" data-buy="'+k+'|'+e.id+'">'+
+        '<div class="nm">'+e.nm+'<span class="cue">'+
+          (e.lock?'🔒 needs '+e.lock.txt+' — '+e.lock.have+' so far':e.d)+'</span></div>'+
         '<div class="pr'+(off?' off':'')+'">'+
           (off?'<s>'+e.c.toLocaleString()+'</s> ':'')+'💵'+p.toLocaleString()+
           (e.s?'<em> ⭐'+e.s+'</em>':'')+'</div></div>';

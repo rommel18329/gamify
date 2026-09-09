@@ -208,6 +208,94 @@ const BADGE_ART={
     c.fillStyle='#8FAE7A'; c.beginPath(); c.arc(S/2,S/2,S*0.085,0,7); c.fill();
   },
 
+  /* SIN PENSARLO — a hand letting go of a wheel that keeps turning. The
+     handoff badge: the grip is drawn OPEN and offset from the rim. */
+  handoff:function(c,S){
+    bgPoly(c,S/2,S/2,S*0.44,8,Math.PI/8); bgFill(c,'#141A22','#3B4552',S*0.03);
+    c.strokeStyle='#8FAE7A'; c.lineWidth=S*0.05;
+    c.beginPath(); c.arc(S*0.54,S*0.48,S*0.24,0,Math.PI*2); c.stroke();
+    c.strokeStyle='#5E7A50'; c.lineWidth=S*0.03;
+    [0.2,1.4,2.6,3.8,5.0].forEach(a=>{ c.beginPath();
+      c.moveTo(S*0.54,S*0.48);
+      c.lineTo(S*0.54+Math.cos(a)*S*0.22, S*0.48+Math.sin(a)*S*0.22); c.stroke(); });
+    // the open hand, clear of the rim
+    c.strokeStyle='#E8C48A'; c.lineWidth=S*0.045; c.lineCap='round';
+    c.beginPath(); c.moveTo(S*0.20,S*0.70); c.lineTo(S*0.20,S*0.50); c.stroke();
+    [[0.145,0.50,0.145,0.36],[0.20,0.48,0.21,0.32],[0.255,0.50,0.275,0.35]].forEach(v=>{
+      c.lineWidth=S*0.032; c.beginPath();
+      c.moveTo(S*v[0],S*v[1]); c.lineTo(S*v[2],S*v[3]); c.stroke(); });
+    c.lineCap='butt';
+  },
+
+  /* EL RELEVO — a baton passing between two hands: one bar handed to the next,
+     with the gap between them deliberately visible. */
+  relay:function(c,S){
+    bgShield(c,S/2,S/2,S*0.72,S*0.80); bgFill(c,'#1A1520','#4A3A55',S*0.03);
+    c.save(); c.translate(S/2,S/2); c.rotate(-0.5);
+    c.fillStyle='#B08CC8';
+    c.fillRect(-S*0.30,-S*0.045,S*0.24,S*0.09);
+    c.fillStyle='#E8C48A';
+    c.fillRect(S*0.06,-S*0.045,S*0.24,S*0.09);
+    c.strokeStyle='#6E5A80'; c.lineWidth=S*0.022; c.setLineDash([S*0.035,S*0.035]);
+    c.beginPath(); c.moveTo(-S*0.05,0); c.lineTo(S*0.05,0); c.stroke();
+    c.setLineDash([]);
+    c.restore();
+    c.fillStyle='#E8C48A'; c.beginPath(); c.arc(S*0.74,S*0.30,S*0.055,0,7); c.fill();
+    c.fillStyle='#B08CC8'; c.beginPath(); c.arc(S*0.26,S*0.70,S*0.055,0,7); c.fill();
+  },
+
+  /* OTRA PERSONA — two profiles facing each other across a seam, the right one
+     drawn a shade further along. Not a mirror: a comparison. */
+  mirror:function(c,S){
+    c.beginPath(); c.rect(S*0.10,S*0.10,S*0.80,S*0.80);
+    bgFill(c,'#101820','#3B4552',S*0.03);
+    const face=(x,dir,col)=>{
+      c.fillStyle=col; c.beginPath();
+      c.moveTo(x,S*0.76);
+      c.lineTo(x,S*0.34);
+      c.quadraticCurveTo(x+dir*S*0.10,S*0.20, x+dir*S*0.19,S*0.32);
+      c.quadraticCurveTo(x+dir*S*0.24,S*0.42, x+dir*S*0.15,S*0.46);
+      c.lineTo(x+dir*S*0.18,S*0.56);
+      c.lineTo(x+dir*S*0.10,S*0.58);
+      c.lineTo(x+dir*S*0.12,S*0.76);
+      c.closePath(); c.fill();
+    };
+    face(S*0.44,-1,'#4E5A68');
+    face(S*0.56, 1,'#8FAE7A');
+    c.strokeStyle='#C9D4C0'; c.lineWidth=S*0.018;
+    c.beginPath(); c.moveTo(S/2,S*0.13); c.lineTo(S/2,S*0.87); c.stroke();
+  },
+
+  /* CASA DE MAESTRO — a roofline crowned. A house silhouette whose ridge is a
+     row of points, so it reads as a crown AND as a roof at thumbnail size. */
+  crown:function(c,S){
+    c.beginPath();
+    c.moveTo(S*0.16,S*0.82); c.lineTo(S*0.16,S*0.50);
+    c.lineTo(S*0.28,S*0.30); c.lineTo(S*0.38,S*0.48);
+    c.lineTo(S*0.50,S*0.24); c.lineTo(S*0.62,S*0.48);
+    c.lineTo(S*0.72,S*0.30); c.lineTo(S*0.84,S*0.50);
+    c.lineTo(S*0.84,S*0.82); c.closePath();
+    bgFill(c,'#C8A24E','#5E4718',S*0.03);
+    c.fillStyle='#2A2110';
+    c.fillRect(S*0.44,S*0.58,S*0.12,S*0.24);
+    [[0.28,0.30],[0.50,0.24],[0.72,0.30]].forEach(v=>{
+      c.fillStyle='#F2E3B0'; c.beginPath(); c.arc(S*v[0],S*v[1],S*0.045,0,7); c.fill(); });
+    c.strokeStyle='#8A6E22'; c.lineWidth=S*0.02;
+    c.beginPath(); c.moveTo(S*0.16,S*0.66); c.lineTo(S*0.84,S*0.66); c.stroke();
+  },
+
+  /* TERCER NIVEL — three rungs, the top one lit and well clear of the others. */
+  ladder:function(c,S){
+    bgPoly(c,S/2,S/2,S*0.44,3,-Math.PI/2); bgFill(c,'#181214','#5A3A3A',S*0.03);
+    c.strokeStyle='#6E5A50'; c.lineWidth=S*0.045;
+    c.beginPath(); c.moveTo(S*0.34,S*0.84); c.lineTo(S*0.38,S*0.30); c.stroke();
+    c.beginPath(); c.moveTo(S*0.66,S*0.84); c.lineTo(S*0.62,S*0.30); c.stroke();
+    [[0.76,'#6E5A50'],[0.60,'#9A8070'],[0.42,'#EF7A5A']].forEach(([y,col],i)=>{
+      c.strokeStyle=col; c.lineWidth=S*(i===2?0.055:0.038);
+      c.beginPath(); c.moveTo(S*0.33,S*y); c.lineTo(S*0.67,S*y); c.stroke(); });
+    c.fillStyle='#EF7A5A'; c.beginPath(); c.arc(S/2,S*0.24,S*0.055,0,7); c.fill();
+  },
+
   /* AGUA VA — a drop with the ring it lands in. */
   droplet:function(c,S){
     c.strokeStyle='#2E6B8A'; c.lineWidth=S*0.018;

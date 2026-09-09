@@ -102,6 +102,82 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
 .goal .gs{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;}
 .frz{margin-top:9px;font-size:10.5px;color:var(--cyan);opacity:.9;}
 
+/* ---- AUTOMATICITY -------------------------------------------------------
+   Deliberately sits ABOVE .goal in the markup and reads warmer than it: the
+   money bar is the scaffolding, this is the thing being built. The tick on
+   .abar is the handoff point drawn on the scale, so the bar is measured
+   against something real rather than just being a bar that fills. */
+.auto{margin-top:11px;border:1.5px solid rgba(126,87,194,.5);border-radius:4px;
+  padding:9px 11px;background:rgba(126,87,194,.10);cursor:pointer;}
+.auto .at{font-size:12.5px;font-weight:600;}
+.auto .at b{color:#B08CC8;font-size:15px;}
+.auto .abar{position:relative;height:4px;background:rgba(233,231,218,.14);
+  border-radius:2px;margin:7px 0 5px;}
+.auto .abar i{display:block;height:100%;border-radius:2px;
+  background:linear-gradient(90deg,#7E57C2,#B08CC8);transition:width .4s ease;}
+.auto .abar u{position:absolute;top:-3px;width:1.5px;height:10px;
+  background:rgba(233,231,218,.55);text-decoration:none;}
+.auto .as{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;}
+
+/* the per-row curve, on the habit list itself */
+.hrow2 .autow{display:block;height:3px;background:rgba(233,231,218,.13);
+  border-radius:2px;margin:5px 0 3px;max-width:180px;overflow:hidden;}
+.hrow2 .autob{display:block;height:100%;background:#7E57C2;transition:width .4s ease;}
+.hrow2 .autob.forming{background:#8E6FCE;}
+.hrow2 .autob.sticking{background:#A98BD8;}
+.hrow2 .autob.nearly{background:#C9B0E8;}
+.hrow2 .autol{display:block;font-size:9.5px;color:var(--dim);letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;}
+.hrow2 .autol.sticking,.hrow2 .autol.nearly{color:#B08CC8;}
+.hrow2 .tw.t2{opacity:.75;color:#B08CC8;}
+.hrow2 .hpay{flex:0 0 auto;text-align:right;font-size:12px;
+  font-variant-numeric:tabular-nums;color:var(--dim);align-self:flex-start;
+  padding-top:2px;}
+/* the framing switch made visible: a cash figure while it is still being paid
+   for, the score itself once the habit is most of the way there */
+.hrow2 .hpay.identity{color:#B08CC8;}
+.hrow2 .hpay .idw{display:block;font-size:14px;font-weight:600;line-height:1;}
+.hrow2 .hpay .idw+em{font-style:normal;font-size:9.5px;opacity:.55;}
+
+/* the LO QUE YA ES TUYO sheet */
+.arow{display:flex;align-items:center;gap:10px;padding:9px 2px;
+  border-bottom:1px solid rgba(233,231,218,.09);}
+.arow .nm{flex:1;font-size:12.5px;line-height:1.3;min-width:0;}
+/* .tw is scoped to .hrow2, so the tier tag arrived here unstyled and ran
+   straight into the habit name. */
+.arow .tw{font-style:normal;font-size:9px;opacity:.6;margin-left:6px;
+  letter-spacing:.1em;text-transform:uppercase;}
+.arow .tw.t2{color:#B08CC8;opacity:.8;}
+.tkh.wrap{flex-wrap:wrap;}
+.arow .acurve{position:relative;flex:0 0 84px;height:4px;
+  background:rgba(233,231,218,.14);border-radius:2px;}
+.arow .acurve i{display:block;height:100%;border-radius:2px;background:#7E57C2;}
+.arow .acurve i.sticking{background:#A98BD8;}
+.arow .acurve i.nearly{background:#C9B0E8;}
+.arow .acurve u{position:absolute;top:-3px;width:1.5px;height:10px;
+  background:rgba(233,231,218,.5);text-decoration:none;}
+.arow .apc{flex:0 0 74px;text-align:right;font-variant-numeric:tabular-nums;}
+.arow .apc b{display:block;font-size:13px;color:#B08CC8;}
+.arow .apc span{font-size:9px;color:var(--dim);}
+.arow.done{opacity:.85;}
+.arow.done .nm{color:#B08CC8;}
+.arow .amast{flex:0 0 auto;color:var(--moss);font-size:16px;}
+.note.tight{margin-top:14px;padding:9px 11px;border-radius:4px;
+  background:rgba(126,87,194,.10);border:1px solid rgba(126,87,194,.3);}
+.note.tight b{color:#B08CC8;}
+
+/* a gated MAESTRIA row: visible, priced, and honest about what it wants */
+.row.gated{opacity:.55;}
+.row.gated .cue{color:#B08CC8;opacity:.85;}
+
+/* the handoff card */
+.cc-b.small{font-size:26px;letter-spacing:.04em;}
+.hand{margin:14px 0 4px;padding:11px;border-radius:4px;
+  background:rgba(126,87,194,.13);border:1.5px solid rgba(126,87,194,.45);}
+.hand span{display:block;font-size:9px;letter-spacing:.16em;color:#B08CC8;}
+.hand b{display:block;font-size:15px;margin:5px 0 4px;}
+.hand em{font-style:normal;font-size:10.5px;color:var(--dim);line-height:1.5;}
+
 /* track browser */
 .tkh{font-size:11px;letter-spacing:.14em;color:var(--moss);margin:16px 0 7px;
   display:flex;align-items:baseline;gap:8px;}
