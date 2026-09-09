@@ -68,6 +68,15 @@ a build step, since the app is meant to be openable with no tooling.
 
 ## State (`S` in `js/data.js`)
 
+`S` carries a `playerId` (a uuid generated once and never changed) and a
+`schemaVersion`. Nothing reads them yet — they exist because this world goes
+multiplayer later, and an anonymous save can't be attributed to a character,
+merged, or synced. `migrate()` backfills a `playerId` onto saves that predate
+it. **Keep `S` strictly JSON-serialisable** — no THREE objects, no functions,
+no class instances — or it stops being syncable and `exportSave()` breaks.
+Bump `SCHEMA_VERSION` only for a shape change `migrate()` can't reconcile by
+adding keys; additive changes don't need one.
+
 `S` is one big object, persisted to `localStorage` under key `sprout_v2`
 via `save()`. `blank()` is the source of truth for its shape; `migrate()`
 fills in any missing keys from `blank()` so old saves don't break when a
@@ -513,7 +522,7 @@ collapsed onto the existing north-south/east-west grid rather than modeled
 as diagonals, since a rotated road would need its own rotated collision
 box, UV-rotated texture handling, and road-following logic nothing else in
 the world has. `AVE_X` no longer doubles as the garage/`CAR_SPOT` x (see
-`HOME_X` below) — the avenue is now a through street the car drives *to*,
+`PLOTS` below) — the avenue is now a through street the car drives *to*,
 not one the garage parks directly on.
 
 `streetSign()` builds each sign as **two single-sided plates back to
@@ -523,35 +532,67 @@ reversed, unreadable text to traffic approaching from the other direction
 the first time this was built. If you add another sign, copy that pattern
 rather than reaching for `DoubleSide` on a textured plane.
 
-### HOME_X — the house sits across C. Marginal from the colmado
+### PLOTS — the world is data, not constants
 
-`HOME_X` (`js/game.js`) is the house/garage/yard compound's shared x,
-matching the owner's own reference map: the house faces the colmado
-directly across `C. MARGINAL`, in the same way `COLMADO_POS` anchors the
-colmado's own block. Every site that used to hardcode its own x assuming a
-house at `x=-2` — `buildHouse()`, `buildGarage()`, `CAR_SPOT`, the walkway
-in `buildGround()`, the front-door/board spots in `spots()`, `buildBoard()`,
-`buildPlayer()`'s spawn, every prop in `buildSecurityProps()` (including
-the fence posts and the dog's per-frame patrol x in `tick()`), and the
-house/garage entries in `buildingColliders()` — now reads `HOME_X` (or a
-fixed offset from it) instead. **z was deliberately left untouched**: the
-existing security-fence perimeter already reaches to within ~3 units of
-C. Marginal's south edge, closely matching the colmado's own ~3.5-unit
-clearance on the street's other side, so the two properties already faced
-each other across the street without moving either one in z — only x
-needed to change. `HOME_X` must be declared *before* `CAR_SPOT`/
-`COLMADO_POS` in the file, since those read it immediately at module-load
-time; top-level `const` has no hoisting the way a function declaration
-does, unlike everything that merely *uses* `HOME_X` from inside a function
-body, which is free to be declared anywhere textually since it won't run
-until called.
+`PLOTS` (`js/game.js`) is the list of player compounds. `PLOTS[0]` is the
+owner's: `{id, ownerId, originX, originZ, rotation, upgrades}`. A second
+entry, `vecino`, is a neighbour rendered by the *identical* builders from a
+different record — it exists to prove the code path works, so **don't delete
+it** without replacing it with something that exercises the same thing.
 
-Moving the house off `x=-2` detached the garage from `AVE_X=9` — the
-garage used to sit right on the avenue's own pavement (same x), and now
-sits in open ground near the house instead, with the car crossing that gap
-to reach the avenue rather than pulling straight onto it. That's a real
-change to the geometry, not an oversight: re-verify it if you ever move
-`HOME_X` again, the same way any `COLMADO_POS` move gets re-verified below.
+This replaced `HOME_X`/`CAR_SPOT`, module constants that every builder read as
+globals. That was fine with one compound in the world and impossible with two,
+which is where this is going (friends and family each get a plot). Two rules
+keep it possible and both are easy to break by accident:
+
+1. **A builder takes a plot and reads `plot.upgrades`. It must never read `S`
+   for anything it draws.** `S` is the local player's save; rendering someone
+   else's house has to be the same code path with a different record.
+   `homePlotUpgrades()` is the single adapter that copies the save into
+   `PLOTS[0].upgrades`, called once from `buildWorld()`. If you find yourself
+   reaching for `S.security` inside a builder, that's the bug.
+2. **Positions inside a compound are plot-LOCAL.** Static compound geometry
+   (house, garage, security props) is parented to the plot's group via
+   `buildPlot()`, so it inherits origin and rotation for free. Anything that
+   moves or is interacted with in world space — the car, the board, the
+   player's spawn, `spots()` — uses `plotToWorld(plot, lx, lz)` instead. The
+   car in particular must **not** be parented to the plot: it drives away.
+
+Local coordinates are the historical ones with the old `HOME_X` subtracted
+from x, so `PLOTS[0]` at `originX:-16, originZ:0` reproduces the previous
+world exactly. That was verified against the pre-refactor build rather than
+assumed — house group at `(-16,0,-2)`, garage at `(-5,0,-3.5)`, car spawn
+`(-5,0,7)`, player spawn `(-14,0,6)`, and the house/garage world bounding
+boxes identical to three decimals. If you change any local offset, re-check
+against those numbers.
+
+`world.house`/`world.garage`/`world.dog`/`world.guard` are only captured for
+`PLOTS[0]` — they're interaction and animation targets, and a neighbour's
+house must not be tappable as your own security panel. The dog's patrol in
+`tick()` now moves it in **plot-local x**, since it's a child of the group.
+
+**Rotation is only exact on quarter turns.** Both collision systems are
+axis-aligned, so `plotBox()` swaps a footprint's extents for odd multiples of
+90°. An arbitrary angle would need a real oriented-box collider; until
+something needs one, keep plots on quarter turns. `vecino` is deliberately at
+-90° (facing the avenue) so this path is actually exercised rather than
+theoretical.
+
+`PLOT_FOOTPRINTS` holds each compound's solid boxes in local space, using the
+same numbers `buildHouse()`/`buildGarage()` position their meshes at, so the
+two can't drift. `buildingColliders()` maps every plot through `plotBox()`,
+then appends the landmarks.
+
+**`COLMADO_POS` is deliberately still a constant.** It's a landmark, not a
+plot: nobody owns it, it has no upgrades, and `buildColmado(colPos)` was
+already parameterized. Making it a plot would model it wrongly. Landmarks
+(the colmado, `PLACEHOLDER_BUILDINGS`) contribute colliders separately.
+
+Moving the house off `x=-2` originally detached the garage from `AVE_X=9` —
+the garage used to sit right on the avenue's pavement and now sits in open
+ground near the house, with the car crossing that gap to reach the avenue.
+That's a real change to the geometry, not an oversight; re-verify it if you
+move `PLOTS[0].originX` again.
 
 ### Placeholder buildings
 

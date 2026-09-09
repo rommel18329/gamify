@@ -22,26 +22,87 @@ let physWorld=null,vehicle=null,chassisBody=null,carRideHeight=0;   // cannon.js
 const CAR_LENGTH=9.6, CAR_WIDTH=CAR_LENGTH*0.42;
 const PLAYER_RADIUS=0.5, CAR_RADIUS=CAR_LENGTH*0.245;   // CAR_RADIUS: fallback-mode collision only
 
-/* The house/garage/yard's shared x — a module constant, not a per-function
-   literal, because every piece of that compound (house, garage, CAR_SPOT, the
-   walkway, the front-door and board interaction spots, the security-upgrade
-   props, the collider boxes) used to hardcode x=-2/x=9 independently, all
-   assuming a house at x=-2. Moving the house to sit across C. Marginal from
-   the colmado (per the owner's reference map) meant shifting all of them by
-   the same amount, so HOME_X is that single anchor: every one of those sites
-   reads HOME_X (or an offset from it) instead of its own copy of -2. Must be
-   declared before CAR_SPOT/COLMADO_POS below, which read it immediately at
-   module-load time — top-level `const` has no hoisting the way a function
-   declaration does.
-   Z was deliberately left untouched — the existing security-fence perimeter
-   already reaches to within ~3 units of C. Marginal's south edge (matching
-   the colmado's own ~3.5-unit clearance on the street's other side), so the
-   two properties already face each other across the street without moving
-   either one in z. This also detaches the garage from AVE_X=9 (the garage
-   used to sit right on the avenue's pavement) — the car now crosses open,
-   unobstructed ground to reach the avenue instead of pulling straight onto
-   it, which is a real change to the geometry, not a bug. */
-const HOME_X=-16;
+/* ---- PLOTS: the world is data, not constants -------------------------------
+   A plot is one player's compound — house, garage, yard, security props, and
+   the spot their car parks in. `PLOTS[0]` is mine. Everything about where a
+   compound sits and what has been built on it lives in the record, and the
+   builders below read ONLY the record they are handed.
+
+   This replaces a module constant (HOME_X) that every builder read as a
+   global. That was fine while there was exactly one compound in the world and
+   impossible the moment there are two, which is where this is going: friends
+   and family each get a plot on this block, rendered by this same code from
+   their own record. Two rules keep that possible, and both are easy to break
+   by accident:
+
+     1. A builder takes a plot and reads `plot.upgrades`. It must NEVER read
+        `S` for anything it draws — `S` is MY save, and rendering someone
+        else's house has to be the same code path with a different record.
+        homePlotUpgrades() is the one adapter that copies my save into my
+        plot's record, and it is called once per build.
+     2. Positions inside a compound are LOCAL to the plot. Use plotToWorld()
+        to get a world position (the car, the board, interaction spots, the
+        player's spawn) and parent static compound geometry to the plot's own
+        group so it inherits the origin and rotation for free.
+
+   Local coordinates here are the historical ones with the old HOME_X removed
+   from x, so plot[0] at originX=-16, originZ=0 reproduces the previous world
+   exactly — the house still lands at (-16,0,-2), the car at (-5,0,7). */
+function emptyUpgrades(){
+  return {
+    security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
+    vehicle:{tier:0,mods:{tires:0,wheels:0,tint:0,tune:0},paint:'#6E7B8B'},
+    person:{skin:'#C9884F',outfit:'#2C3242'}
+  };
+}
+/* The ONE place my save crosses into the render model. Called from
+   buildWorld(); after this nothing downstream touches S to draw anything. */
+function homePlotUpgrades(){
+  return {
+    security:Object.assign({},S.security),
+    vehicle:{tier:S.vehicle.tier,mods:Object.assign({},S.vehicle.mods),paint:S.vehicle.paint},
+    person:Object.assign({},S.person)
+  };
+}
+const PLOTS=[
+  // mine — originX is the old HOME_X, originZ 0 so every historical local
+  // z-offset (house at -2, car at +7, fence at ±15.5) still lands where it did
+  {id:'home', ownerId:null, originX:-16, originZ:0, rotation:0, upgrades:emptyUpgrades()},
+  /* A neighbour, rendered from a plain record through the identical builders —
+     this is what proves the refactor works rather than a comment claiming it
+     does. Their upgrades are simply different numbers: a walled yard with a
+     dog and one light, no cameras.
+
+     Sited east of the avenue and rotated a quarter turn so the front door
+     faces the road, the way a house on that side of the street would. The
+     rotation is deliberate: it exercises plotToWorld() and plotBox()'s extent
+     swap, which a second plot at rotation 0 would leave completely untested.
+     Clearances, all verified against buildingColliders() and buildStreets():
+       fence  x 18.5 .. 51.5   (avenue pavement ends at x 13.5 — 5 clear)
+       fence  z -13  .. 15.5   (C. Marginal starts at z 18.5 — 3 clear, the
+                                same margin my own compound keeps)
+     Nothing about drawing it knows it isn't mine. */
+  {id:'vecino', ownerId:'neighbour-demo', originX:34, originZ:0, rotation:-Math.PI/2,
+   upgrades:(function(){ const u=emptyUpgrades();
+     u.security.doors=1; u.security.dog=1; u.security.lights=1;
+     u.vehicle.paint='#8C5A4A'; return u; })()}
+];
+function homePlot(){ return PLOTS[0]; }
+/* Local (lx,lz) on a plot -> world position. Rotation follows three.js's own
+   Ry convention so a plot group's rotation.y and this stay consistent. */
+function plotToWorld(plot,lx,lz,out){
+  const c=Math.cos(plot.rotation||0), sn=Math.sin(plot.rotation||0);
+  return (out||new THREE.Vector3()).set(
+    plot.originX + lx*c + lz*sn, 0,
+    plot.originZ - lx*sn + lz*c);
+}
+/* Static compound geometry hangs off this so it inherits origin + rotation. */
+function plotGroup(plot){
+  const g=new THREE.Group();
+  g.position.set(plot.originX,0,plot.originZ);
+  g.rotation.y=plot.rotation||0;
+  return g;
+}
 /* Car handling. These are tuned numbers, not guesses — every one was measured
    in isolated Node against the real cannon.js vehicle (top speed, 0-to-stop
    distance, 180-degree turn time, peak slip angle, chassis uprightness) before
@@ -345,10 +406,11 @@ function buildGround(){
   // painted stripe on the dirt — same footprint as before so nothing that keys
   // off the player's spawn or the door spot shifts
   const walk=M(new THREE.BoxGeometry(2.6,.22,12),nightMode?0x5B584F:0xACA492,{ink:false,lift:.04});
-  walk.position.set(HOME_X+2,.11,7); scene.add(walk);
+  const wp=plotToWorld(homePlot(),2,7);
+  walk.position.set(wp.x,.11,wp.z); scene.add(walk);
   [-1.45,1.45].forEach(x=>{
     const kerb=M(new THREE.BoxGeometry(.3,.34,12),nightMode?0x6B6659:0xC0B9A8,{ink:false,lift:.04});
-    kerb.position.set(HOME_X+2+x,.17,7); scene.add(kerb);
+    kerb.position.set(wp.x+x,.17,wp.z); scene.add(kerb);
   });
 }
 
@@ -463,11 +525,12 @@ function roofKit(g,x,y,z,spanX,spanZ){
   });
 }
 
-/* The house keeps its 15 x 11 footprint, now at (HOME_X,0,-2) — see HOME_X's
-   own comment for why it moved and why only x did. Its front-door spot stays
-   at z=5.62; buildingColliders(), spots(), and the security props all key off
-   HOME_X rather than their own copies of the old x=-2 literal. */
-function buildHouse(){
+/* The house keeps its 15 x 11 footprint, at plot-local (0,-2) — so on my plot
+   (originX -16) it still lands at world (-16,0,-2) exactly as before. Its
+   front-door spot stays at local z=5.62. buildingColliders(), spots() and the
+   security props all derive from the same local numbers via plotToWorld(),
+   rather than each keeping its own copy of an absolute x. */
+function buildHouse(plot,parent){
   const house=new THREE.Group();
   const WALL=nightMode?0x8A3F53:0xE86A8A;                  // barrio pink
   const TRIM=nightMode?0x8C8474:0xE4DCC8;
@@ -529,8 +592,9 @@ function buildHouse(){
   const meter=M(new THREE.BoxGeometry(.5,.7,.24),nightMode?0x3D444C:0x5A6470,{inkT:.05});
   meter.position.set(6.4,3.7,5.6); house.add(meter);
 
-  house.position.set(HOME_X,0,-2);
-  scene.add(house); world.house=house;
+  house.position.set(0,0,-2);              // local to the plot
+  parent.add(house);
+  if(plot===homePlot()) world.house=house;  // only mine is an interaction target
 }
 
 /* the car is parked outside on the driveway (see buildCar()) — this box is a
@@ -539,7 +603,7 @@ function buildHouse(){
 /* Same footprint and door position as before — objectHit() picks the garage out
    by mesh and CAR_SPOT parks the car right off its door face. Only restyled, so
    it doesn't sit next to the house looking like it came from a different game. */
-function buildGarage(){
+function buildGarage(plot,parent){
   const garage=new THREE.Group();
   const gbody=M(new THREE.BoxGeometry(7,4.4,8),nightMode?0x76705F:0xB8AE96,
     {inkT:.018,map:detailMap('wall',2,1)});
@@ -552,8 +616,9 @@ function buildGarage(){
   for(let i=1;i<5;i++){   // roll-up door slats
     const line=M(new THREE.BoxGeometry(5.6,.05,.02),0x24262C,{ink:false}); line.position.set(0,.5+i*.62,4.16); garage.add(line);
   }
-  garage.position.set(HOME_X+11,0,-3.5);   // +11: the same offset from the house it always had
-  scene.add(garage); world.garage=garage;
+  garage.position.set(11,0,-3.5);          // +11: the same offset from the house it always had
+  parent.add(garage);
+  if(plot===homePlot()) world.garage=garage;
 }
 
 /* ---- COLMADO (corner store) — down the street ----
@@ -804,8 +869,13 @@ function buildLighting(){
 }
 
 /* security props */
-function buildSecurityProps(){
-  const sec=S.security;
+/* Builds a plot's visible security upgrades from ITS OWN record — never from
+   S. Every position here is plot-local, so the same code draws my compound and
+   a neighbour's from different numbers. `world.dog`/`world.guard` are only
+   captured for my plot, since those are the ones tick() animates and the game
+   interacts with. */
+function buildSecurityProps(plot,parent){
+  const sec=plot.upgrades.security;
   if(sec.cameras>0){
     const n=Math.min(4,sec.cameras+1);
     for(let i=0;i<n;i++){
@@ -815,24 +885,27 @@ function buildSecurityProps(){
       const led=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8),new THREE.MeshBasicMaterial({color:0xE63946}));
       led.position.set(.86,.10,0); c.add(led);
       const a=(i/n)*Math.PI*2;
-      c.position.set(HOME_X+Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7); c.rotation.y=-a+Math.PI;
-      scene.add(c);
+      c.position.set(Math.cos(a)*7.7,5.5,-2+Math.sin(a)*5.7); c.rotation.y=-a+Math.PI;
+      parent.add(c);
     }
   }
   if(sec.lights>0){
     const n=Math.min(4,sec.lights);
     for(let i=0;i<n;i++){
       const L=M(new THREE.SphereGeometry(.32,12,10),0xF0EAD8,{inkT:.05}); L.scale.set(1.4,.8,.8);
-      L.position.set(HOME_X+(i%2?7.9:-7.9),5.9,-2+(i<2?5.9:-5.9)); scene.add(L);
-      if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.3,24); pl.position.copy(L.position); scene.add(pl); }
+      L.position.set((i%2?7.9:-7.9),5.9,-2+(i<2?5.9:-5.9)); parent.add(L);
+      // the point light is parented alongside the lamp, so it inherits the
+      // plot transform too — copying a local position into a scene-level light
+      // would put it at the wrong place for any plot not at the origin
+      if(nightMode){ const pl=new THREE.PointLight(0xFFE9A8,1.3,24); pl.position.copy(L.position); parent.add(pl); }
     }
   }
-  if(sec.alarm>0){ const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05}); ab.position.set(HOME_X+2.4,4.7,5.72); scene.add(ab); }
+  if(sec.alarm>0){ const ab=M(new THREE.BoxGeometry(.7,.9,.3),0xE63946,{inkT:.05}); ab.position.set(2.4,4.7,5.72); parent.add(ab); }
   if(sec.doors>0){
     const fh=.9+sec.doors*.35;
-    const mk=(x,z)=>{ const p=limb(.07,.09,fh,0x5A4630,{inkT:.07}); p.position.set(x,fh/2,z); scene.add(p); };
-    for(let i=-13;i<=13;i+=1.7){ mk(i+HOME_X,15.5); mk(i+HOME_X,-17.5); }
-    for(let i=-15;i<=15;i+=1.7){ mk(HOME_X-11.5,i-2); mk(HOME_X+15.5,i-2); }
+    const mk=(x,z)=>{ const p=limb(.07,.09,fh,0x5A4630,{inkT:.07}); p.position.set(x,fh/2,z); parent.add(p); };
+    for(let i=-13;i<=13;i+=1.7){ mk(i,15.5); mk(i,-17.5); }
+    for(let i=-15;i<=15;i+=1.7){ mk(-11.5,i-2); mk(15.5,i-2); }
   }
   if(sec.dog>0){
     const d=new THREE.Group();
@@ -843,13 +916,26 @@ function buildSecurityProps(){
       const l=limb(.09,.07,.58,0x513520,{inkT:.07}); l.position.set(x,.34,z); d.add(l);
     });
     const t=limb(.07,.04,.55,0x77502F,{inkT:.08}); t.position.set(-.80,.95,0); t.rotation.z=-.8; d.add(t);
-    d.position.set(HOME_X-6,0,6); scene.add(d); world.dog=d;
+    d.position.set(-6,0,6); parent.add(d);
+    if(plot===homePlot()) world.dog=d;   // tick() patrols this one, in plot-local x
   }
   if(sec.detail>0){
     const guard=modelPerson()||makePerson(0x1A2028,0xC9884F,.62,{hair:0x14100C});
-    guard.position.set(HOME_X+6.5,0,9); guard.rotation.y=-.6;
-    scene.add(guard); world.guard=guard;
+    guard.position.set(6.5,0,9); guard.rotation.y=-.6;
+    parent.add(guard);
+    if(plot===homePlot()) world.guard=guard;
   }
+}
+
+/* Builds one whole compound. This is the function that will later be called
+   once per connected player instead of once for me. */
+function buildPlot(plot){
+  const g=plotGroup(plot);
+  scene.add(g);
+  buildHouse(plot,g);
+  buildGarage(plot,g);
+  buildSecurityProps(plot,g);
+  return g;
 }
 
 /* car — parked on the driveway, just outside the garage door, so it's actually
@@ -873,15 +959,21 @@ function buildSecurityProps(){
    Headlights material centroids at z=+1.99, TailLights at z=-1.88. If you
    ever swap the car model, measure it the same way rather than adding an
    offset back. */
-const CAR_SPOT=new THREE.Vector3(HOME_X+11,0,7);
+/* The car's parking spot in WORLD space, derived from its plot rather than
+   stored. The car drives away, so unlike the house it is NOT parented to the
+   plot group — it is a free object whose spawn happens to be a plot-local
+   point. CAR_SPOT_LOCAL is that point; carSpot() resolves it. */
+const CAR_SPOT_LOCAL={x:11,z:7};
+function carSpot(plot){ return plotToWorld(plot||homePlot(),CAR_SPOT_LOCAL.x,CAR_SPOT_LOCAL.z); }
 function buildCar(){
   world.car=modelCar(S.vehicle.paint)||makeCar();
-  world.car.position.copy(CAR_SPOT); world.car.rotation.y=0;
+  const cs=carSpot();
+  world.car.position.copy(cs); world.car.rotation.y=homePlot().rotation||0;
   scene.add(world.car);
   // the fallback physics is always built, cheap and ready, even when cannon.js
   // is driving — carPhys.rot uses the SAME convention as world.car.rotation.y
   carPhys=new CarPhysics({length:CAR_LENGTH,width:CAR_WIDTH});
-  carPhys.pos=[CAR_SPOT.x,CAR_SPOT.z]; carPhys.rot=0;
+  carPhys.pos=[cs.x,cs.z]; carPhys.rot=homePlot().rotation||0;
 }
 
 /* the colmado's world position — a module constant (not a buildWorld() local)
@@ -942,14 +1034,36 @@ function buildPlaceholders(){
    and the domino table are deliberately left out — thin single posts, not
    walls, and colliding with every one of them would make walking near the
    house feel like fighting the geometry. */
+/* Each plot's solid footprints, in plot-LOCAL space — the same numbers
+   buildHouse()/buildGarage() position their meshes at, so the two cannot
+   drift apart. */
+const PLOT_FOOTPRINTS=[
+  {cx:0,  cz:-2,   w:15, d:11},   // house  (matches house.position.set(0,0,-2))
+  {cx:11, cz:-3.5, w:7,  d:8}     // garage (matches garage.position.set(11,0,-3.5))
+];
+/* One local footprint -> a world AABB. Both collision systems are
+   axis-aligned, so a plot rotated by a multiple of 90 degrees just swaps its
+   extents. An arbitrary angle would need a real oriented-box collider; until
+   something actually needs one, plots stay on quarter turns and this rounds
+   to the nearest rather than silently producing a wrong box. */
+function plotBox(plot,f){
+  const quarter=Math.abs(Math.round((plot.rotation||0)/(Math.PI/2))%2);
+  const w=quarter?f.d:f.w, d=quarter?f.w:f.d;
+  const c=plotToWorld(plot,f.cx,f.cz);
+  return {minX:c.x-w/2,maxX:c.x+w/2,minZ:c.z-d/2,maxZ:c.z+d/2};
+}
 function buildingColliders(){
-  return [
-    {minX:HOME_X-7.5,maxX:HOME_X+7.5,minZ:-7.5,maxZ:3.5},                      // house (15x11 @ HOME_X,-2)
-    {minX:HOME_X+7.5,maxX:HOME_X+14.5,minZ:-7.5,maxZ:0.5},                     // garage (7x8 @ HOME_X+11,-3.5)
-    {minX:COLMADO_POS.x-5,maxX:COLMADO_POS.x+5,                                // colmado (10x6) + street clutter
-     minZ:COLMADO_POS.z-3,maxZ:COLMADO_POS.z+4.6},
-    ...PLACEHOLDER_BUILDINGS.map(b=>({minX:b.x-b.w/2,maxX:b.x+b.w/2,minZ:b.z-b.d/2,maxZ:b.z+b.d/2}))
-  ];
+  const out=[];
+  // every plot in the world, mine and anyone else's, through one path
+  PLOTS.forEach(plot=>PLOT_FOOTPRINTS.forEach(f=>out.push(plotBox(plot,f))));
+  // landmarks — not plots: nobody owns them and they have no upgrades. The
+  // colmado's box is padded on its street side to also block the counter,
+  // crates and gas cylinder that stick out past the wall itself.
+  out.push({minX:COLMADO_POS.x-5,maxX:COLMADO_POS.x+5,
+            minZ:COLMADO_POS.z-3,maxZ:COLMADO_POS.z+4.6});
+  PLACEHOLDER_BUILDINGS.forEach(b=>out.push(
+    {minX:b.x-b.w/2,maxX:b.x+b.w/2,minZ:b.z-b.d/2,maxZ:b.z+b.d/2}));
+  return out;
 }
 /* Pushes pos out of any collider it has penetrated, along whichever axis needs
    the smaller correction — the same approach the house-only check used before
@@ -1016,7 +1130,7 @@ function buildVehicle(){
   chassisBody.allowSleep=false;
   chassisBody.angularDamping=CAR_ANGULAR_DAMPING;
   chassisBody.addShape(chassisShape);
-  chassisBody.position.set(CAR_SPOT.x,2.5,CAR_SPOT.z);
+  const cs=carSpot(); chassisBody.position.set(cs.x,2.5,cs.z);
   physWorld.addBody(chassisBody);
 
   // This version of cannon.js defaults indexRightAxis/indexForwardAxis/
@@ -1056,7 +1170,7 @@ function buildBoard(){
   const bp=limb(.09,.11,2.0,0x5A4630,{inkT:.07}); bp.position.y=1.0; board.add(bp);
   const pan=M(new THREE.BoxGeometry(2.4,1.5,.14),0xEFEADC,{inkT:.03}); pan.position.y=2.3; board.add(pan);
   const gr=M(new THREE.BoxGeometry(2.0,1.15,.06),0x5C7A4A,{ink:false}); gr.position.set(0,2.3,.10); board.add(gr);
-  board.position.set(HOME_X-5.5,0,7.5);
+  board.position.copy(plotToWorld(homePlot(),-5.5,7.5));
   scene.add(board); world.board=board;
 }
 
@@ -1090,7 +1204,7 @@ function buildPlayer(){
   // default over-the-shoulder camera (camYaw=PI, ~9.5 units behind the player) settles
   // in open street — at the old z=14 spawn it converged to roughly z=23, which sat
   // *inside* the colmado at z=24 and rendered as a wall of its mint-green trim filling the screen.
-  playerGroup.position.set(HOME_X+2,0,6);
+  playerGroup.position.copy(plotToWorld(homePlot(),2,6));
   scene.add(playerGroup);
   player={pos:playerGroup.position,yaw:Math.PI,walkT:0,targetYaw:Math.PI};
 }
@@ -1120,8 +1234,10 @@ function buildWorld(){
   buildGround();
   buildStreets();
   buildPlaceholders();
-  buildHouse();
-  buildGarage();
+  // my save crosses into the render model exactly here and nowhere else
+  homePlot().ownerId=S.playerId;
+  homePlot().upgrades=homePlotUpgrades();
+  PLOTS.forEach(buildPlot);
   const colPos=COLMADO_POS;
   buildColmado(colPos);
   buildDominoScene(colPos);
@@ -1130,7 +1246,6 @@ function buildWorld(){
   buildPalms(colPos);
   buildPowerLines();
   buildLighting();
-  buildSecurityProps();
   buildPhysicsWorld();
   buildCar();
   buildVehicle();
@@ -1147,9 +1262,9 @@ function buildWorld(){
 /* ---- interaction spots ---- */
 function spots(){
   return [
-    {key:'car',nm:'YOUR VEHICLE',hint:'Drive or view garage',p:CAR_SPOT,r:5,act:()=>openCarMenu()},
-    {key:'door',nm:'FRONT DOOR',hint:'Home security',p:new THREE.Vector3(HOME_X,0,5.6),r:3.6,act:()=>openSecurity()},
-    {key:'board',nm:'THE BOARD',hint:'Log your day',p:new THREE.Vector3(HOME_X-5.5,0,7.5),r:3.6,act:()=>openLog()},
+    {key:'car',nm:'YOUR VEHICLE',hint:'Drive or view garage',p:carSpot(),r:5,act:()=>openCarMenu()},
+    {key:'door',nm:'FRONT DOOR',hint:'Home security',p:plotToWorld(homePlot(),0,5.6),r:3.6,act:()=>openSecurity()},
+    {key:'board',nm:'THE BOARD',hint:'Log your day',p:plotToWorld(homePlot(),-5.5,7.5),r:3.6,act:()=>openLog()},
     {key:'colmado',nm:'EL COLMADO',hint:'Say what\'s up',p:COLMADO_POS,r:6,act:()=>colmadoGreet()}
   ];
 }
@@ -1793,7 +1908,7 @@ function tick(){
   }
 
   if(world.dog){
-    world.dog.position.x=HOME_X-6+Math.sin(clock.elapsedTime*.5)*3.2;
+    world.dog.position.x=-6+Math.sin(clock.elapsedTime*.5)*3.2;   // plot-LOCAL x now
     world.dog.rotation.y=Math.cos(clock.elapsedTime*.5)>0?0:Math.PI;
   }
   updateAnimated(dt);   // every rigged character, moving or standing

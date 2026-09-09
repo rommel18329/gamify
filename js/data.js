@@ -25,8 +25,28 @@ const VITALS=[
   {k:'DISCIPLINE',ic:'⚙️', col:'#FFA726', src:['wstart','wend']}
 ];
 
+/* A stable per-player id, generated once and never changed. Nothing uses it
+   yet — it exists because this world goes multiplayer later, and an anonymous
+   save can't be attributed to a character, merged, or synced. Cheap now,
+   impossible to backfill onto saves that already exist. crypto.randomUUID is
+   unavailable on http:// and in older mobile browsers, hence the fallback. */
+function newPlayerId(){
+  try{ if(crypto&&crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  let out='';
+  for(let i=0;i<32;i++){
+    out+=Math.floor(Math.random()*16).toString(16);
+    if(i===7||i===11||i===15||i===19) out+='-';
+  }
+  return out;
+}
+/* Bumped when S's SHAPE changes in a way migrate() alone can't reconcile.
+   migrate() only ever ADDS missing keys from blank(), so additive changes
+   don't need a bump — this is for the day something has to be rewritten. */
+const SCHEMA_VERSION=1;
+
 function blank(){
   return {
+    playerId:newPlayerId(), schemaVersion:SCHEMA_VERSION,
     log:{}, workout:{}, diet:{}, water:{}, perfectDone:{},
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
@@ -36,7 +56,16 @@ function blank(){
     incident:null, lastCheck:Date.now(), defended:0, breached:0, events:[]
   };
 }
-function migrate(obj){ const b=blank(); for(const k in b) if(obj[k]===undefined) obj[k]=b[k]; return obj; }
+/* Only ever ADDS keys missing from blank(); stale keys in an old save are
+   simply ignored. An existing save with no playerId gets one here — that is
+   the whole point of doing this before the save format matters to anyone. */
+function migrate(obj){
+  const b=blank();
+  for(const k in b) if(obj[k]===undefined) obj[k]=b[k];
+  if(!obj.playerId) obj.playerId=newPlayerId();
+  obj.schemaVersion=SCHEMA_VERSION;
+  return obj;
+}
 let S;
 try{ S=migrate(JSON.parse(localStorage.getItem(KEY))||blank()); }catch(e){ S=blank(); }
 function save(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){ showErr('Save failed: '+e.message); } }
