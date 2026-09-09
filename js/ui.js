@@ -263,6 +263,54 @@ function openTracks(only){
   openSheet('WHAT YOU\'RE BUILDING — 💵 '+S.cash.toLocaleString());
 }
 
+/* ---- the badge gallery ----
+   The collection has to be visible for the gaps to be, so a locked badge is
+   the SAME drawing desaturated rather than a placeholder — you can see the
+   shape you're missing. Hidden ones show as a marked silhouette: you know
+   something is there, not what, which is the entire mechanic. */
+function openBadges(){
+  const cnt=achCounts();
+  let html='<div class="note">'+cnt.got+' of '+cnt.total+
+    ' — the greyed ones are still out there, and the marked ones you find out about '+
+    'when they happen.</div><div class="bgrid">';
+  const order=ACHIEVEMENTS.slice().sort((a,b)=>{
+    const sa=achState(a), sb=achState(b);
+    const rank=x=>x==='earned'?0:x==='locked'?1:2;
+    return rank(sa)-rank(sb);
+  });
+  order.forEach(a=>{
+    const st=achState(a);
+    html+='<div class="bcard '+st+'">'+
+      '<img alt="" src="'+badgeImg(a,104,st)+'">'+
+      '<div class="bnm">'+(st==='hidden'?'???':a.nm)+'</div>'+
+      '<div class="bd">'+(st==='hidden'?'Not telling.':a.d)+'</div>'+
+      (st==='earned'?'<div class="bwhen">'+fmt(today(new Date(S.achieved[a.id])))+'</div>':'')+
+    '</div>';
+  });
+  html+='</div>';
+  document.getElementById('sheetBody').innerHTML=html;
+  openSheet('BADGES — '+cnt.got+'/'+cnt.total);
+}
+
+/* An unlock shows the badge itself. A line of text would be a notification;
+   the point of drawing twenty different things is that you see the new one. */
+function showAchToast(a){
+  const el=document.getElementById('achToast');
+  if(!el) return;
+  el.innerHTML='<img alt="" src="'+badgeImg(a,80,'earned')+'">'+
+    '<div><b>'+a.nm+'</b><span>'+a.d+'</span></div>';
+  el.classList.add('show');
+  clearTimeout(el.__t);
+  el.__t=setTimeout(()=>el.classList.remove('show'),5200);
+  if(typeof chime==='function') chime(1,1);
+}
+// data.js raises unlocks through this hook rather than touching the DOM itself
+onAchievement=function(a){
+  // stagger, so two landing together don't overwrite each other
+  const n=(showAchToast.__q=(showAchToast.__q||0)+1);
+  setTimeout(()=>{ showAchToast(a); showAchToast.__q--; },(n-1)*5400);
+};
+
 /* Cues, in the player's own words. Routine anchors ("when I get in bed") build
    automaticity better than clock times, so every habit carries one and this
    lets it be rewritten to match a real routine. */

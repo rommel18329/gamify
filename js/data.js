@@ -73,6 +73,8 @@ function blank(){
     perfectCount:0,        // perfect days ever, drives freeze grants
     lastRoll:null,         // last sessionDay rollDay() processed
     deal:null,             // today's discounted item
+    achieved:{},           // achievement id -> unlocked timestamp
+    stats:{},              // running counters the achievement tests read
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
@@ -257,8 +259,9 @@ function toggleHabit(id, el){
   }
   S.log[k][key]=true;
   earn('habit', el);            // paid on the tap, never batched
+  noteLogTime();
   checkPerfectDay(el);
-  save(); return true;
+  save(); checkAchievements(); return true;
 }
 function markWorkout(el){
   const k=sessionDay();
@@ -291,7 +294,15 @@ function logMeal(el){ return logCounter('diet', DIET_TARGET, 'diet', el); }
 function unlogMeal(el){ return unlogCounter('diet', 'diet', el); }
 function logWater(el){
   const done=logCounter('water', WATER_TARGET, 'water', el);
-  if(done) checkPerfectDay(el);
+  if(done){
+    const k=sessionDay();
+    // count the DAY once, the moment the target is reached
+    if((S.water[k]||[]).length===WATER_TARGET && S.stats.waterLast!==k){
+      S.stats.waterLast=k; bumpStat('waterDays');
+    }
+    checkPerfectDay(el);
+    checkAchievements();
+  }
   return done;
 }
 function unlogWater(el){ return unlogCounter('water', 'water', el); }
@@ -368,7 +379,7 @@ function buySec(k,price){
   if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
   S.cash-=cost; S.security[k]=cur+1; S.cond[k]=100;
   ev('Installed: '+nx.nm,'win'); save(); impact('INSTALLED'); renderSecurity(); rebuildProps();
-  return true;
+  checkAchievements(); return true;
 }
 function serviceAll(){
   let cost=0;
@@ -403,7 +414,7 @@ function buyVeh(price){
   if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
   S.cash-=cost; S.vehicle.tier++; S.vehicle.mods={tires:0,wheels:0,tint:0,tune:0};
   ev('Bought: '+nx.nm,'win'); save(); impact('DELIVERED'); renderGarage(); rebuildCar();
-  return true;
+  checkAchievements(); return true;
 }
 function buyMod(cat,i,price){
   const m=MODS[cat][i]; if(!m) return false;
@@ -412,7 +423,7 @@ function buyMod(cat,i,price){
   if(S.cash<cost){ toast('Need \ud83d\udcb5'+cost.toLocaleString()); return false; }
   S.cash-=cost; S.vehicle.mods[cat]=i;
   ev('Installed: '+m.nm,'win'); save(); impact('INSTALLED'); renderGarage(); rebuildCar();
-  return true;
+  checkAchievements(); return true;
 }
 
 /* ---- visibility & incidents ---- */
@@ -446,7 +457,7 @@ function checkIncident(){
         S.breached++;
         ev(S.incident.nm+' succeeded while you were away. Lost 💵'+lost.toLocaleString()+'.','loss');
       }
-      S.incident.done=true; save();
+      S.incident.done=true; save(); checkAchievements();
     }
     return;
   }
@@ -544,9 +555,10 @@ function claimWindow(win,el,now){
   earn('window',el);
   // the variable reward, on top of the fixed payout — never instead of it
   const sc=rollScratch();
+  if(sc.amount>=400) S.stats.jackpot=true;    // the top band came in
   S.lastScratch=sc;
   earn('window',el,sc.amount);
-  save();
+  save(); checkAchievements();
   return true;
 }
 function windowClaimed(win,now){
@@ -666,7 +678,7 @@ function buyTrackItem(key,id){
   S.cash-=price; S[key][it.f]=it.lv;
   ev(it.nm+' — done','win'); save(); impact('DONE');
   if(typeof rebuildProps==='function') rebuildProps();
-  return true;
+  checkAchievements(); return true;
 }
 
 /* ---- A FLOOR, NOT A CADENCE ----------------------------------------------
@@ -768,7 +780,15 @@ function rollDay(){
       d.setDate(d.getDate()+1);
     }
   }
+  /* TERCO watches for the hard version of persistence: a long streak lost and
+     then rebuilt. Recorded here rather than tested from history, because
+     "used to have 20 days" is not visible in the log once it is gone. */
+  const st=habitStreak();
+  if(st>(S.stats.bestStreak||0)) S.stats.bestStreak=st;
+  if(st===0&&(S.stats.bestStreak||0)>=20) S.stats.brokeLong=true;
+  if(S.stats.brokeLong&&st>=3){ S.stats.rebuilt=true; S.stats.brokeLong=false; }
   S.lastRoll=now; save();
+  checkAchievements();
 }
 function grantFreezeIfDue(){
   S.perfectCount=(S.perfectCount||0)+1;
@@ -842,4 +862,156 @@ function respect(){
   const d=S.drip;
   return (d.shirt||0)*4+(d.pants?3:0)+(d.shoes||0)*4+(d.hat?3:0)+
          (d.chain||0)*6+(d.glasses?3:0);
+}
+
+/* ===================== ACHIEVEMENTS =====================
+   Each one has its own procedurally-drawn badge (js/badges.js, keyed by `art`)
+   — a different silhouette and motif, not one frame recoloured. A wall of
+   identical discs is a spreadsheet; the collection only works if the shapes
+   are told apart at thumbnail size.
+
+   `hidden:true` means it isn't listed until it fires. That is the whole point
+   of them: a goal you can see is a checklist, and a checklist you can see the
+   end of stops producing any response. Hidden ones are the surprise surface.
+
+   `test()` reads S and returns a boolean. Keep them CHEAP — checkAchievements()
+   runs after every log, purchase and incident. Anything that would need to walk
+   a year of history should keep a counter in S.stats instead, the way
+   `earlyAM` and `lateNight` do below. */
+const ACHIEVEMENTS=[
+  // ---- visible ----
+  {id:'madrugador', nm:'MADRUGADOR', art:'sunrise',
+   d:'Ten mornings logged before six. The block was still asleep.',
+   test:()=>(S.stats.earlyAM||0)>=10},
+
+  {id:'colmadero', nm:'COLMADERO', art:'bottlecap',
+   d:'Thirty days running at the colmado. They know your order.',
+   test:()=>(S.stats.colmadoRun||0)>=30},
+
+  {id:'sinfalta', nm:'SIN FALTA', art:'tally',
+   d:'Thirty days without missing. Not one.',
+   test:()=>habitStreak()>=30},
+
+  {id:'bloque', nm:'EL BLOQUE TE CONOCE', art:'blockplan',
+   d:'Every last thing on the block, done. It looks like somebody lives here.',
+   test:()=>Object.keys(S.barrio).every(k=>S.barrio[k]>0)},
+
+  {id:'nadieentra', nm:'NADIE ENTRA', art:'shield',
+   d:'Ten tries, ten failures. Nobody has ever gotten in.',
+   test:()=>S.defended>=10&&S.breached===0},
+
+  {id:'drip', nm:'DIABLO CON DRIP', art:'chain',
+   d:'Head to toe, on purpose. People notice.',
+   test:()=>Object.keys(S.drip).every(k=>S.drip[k]>0)},
+
+  {id:'vuelta', nm:'VUELTA LARGA', art:'route',
+   d:'The whole avenue, end to end, no reason.',
+   test:()=>(S.stats.aveSpan||0)>=(AVE_Z1-AVE_Z0)*0.9},
+
+  {id:'piloto', nm:'PILOTO AUTOMÁTICO', art:'dial',
+   d:'One habit that runs without you now. That was the whole idea.',
+   test:()=>HABITS.some(h=>habitStreakFor(h.id)>=66)},
+
+  {id:'agua', nm:'AGUA VA', art:'droplet',
+   d:'Twenty-five days you actually drank the water.',
+   test:()=>(S.stats.waterDays||0)>=25},
+
+  {id:'techo', nm:'TECHO PROPIO', art:'zinc',
+   d:'The house is finished. Even the second floor the rebar was waiting for.',
+   test:()=>Object.keys(S.casa).every(k=>S.casa[k]>0)},
+
+  {id:'capicua', nm:'CAPICÚA', art:'domino',
+   d:'A hundred perfect days. Slam it down.',
+   test:()=>(S.perfectCount||0)>=100},
+
+  {id:'rejas', nm:'TODO CON REJAS', art:'rejas',
+   d:'Every window, every gate, top of the range.',
+   test:()=>Object.keys(SEC).every(k=>S.security[k]>=SEC[k].t.length-1)},
+
+  {id:'motor', nm:'MOTOR SANO', art:'gear',
+   d:'Every mod on the car. It sounds different now.',
+   test:()=>Object.keys(MODS).every(k=>S.vehicle.mods[k]>=MODS[k].length-1)},
+
+  {id:'cuartos', nm:'CUARTOS', art:'notes',
+   d:'A hundred thousand earned, all of it off things you actually did.',
+   test:()=>S.lifetime>=100000},
+
+  // ---- hidden: these don't appear until they fire ----
+  {id:'trasnochado', nm:'TRASNOCHADO', art:'moon', hidden:true,
+   d:'Five nights logged after two in the morning. Nobody is judging.',
+   test:()=>(S.stats.lateNight||0)>=5},
+
+  {id:'premio', nm:'EL PREMIO GORDO', art:'ticket', hidden:true,
+   d:'The colmado scratch came in. It does happen.',
+   test:()=>!!S.stats.jackpot},
+
+  {id:'vecino', nm:'EL VECINO TE CUBRIÓ', art:'cover', hidden:true,
+   d:'You missed a day and somebody covered for you. The streak never knew.',
+   test:()=>Object.keys(S.covered||{}).length>0},
+
+  {id:'terco', nm:'TERCO', art:'mend', hidden:true,
+   d:'Lost a long streak and came back anyway. That is the harder one.',
+   test:()=>!!S.stats.rebuilt},
+
+  {id:'pintor', nm:'MANO DE PINTURA', art:'swatch', hidden:true,
+   d:'Fresh paint on the house and a mural on the corner. Somebody good did it.',
+   test:()=>S.casa.paint>0&&S.barrio.mural>0},
+
+  {id:'fantasma', nm:'FANTASMA', art:'empty', hidden:true,
+   d:'Rich enough to be worth robbing, and nothing has ever happened.',
+   test:()=>S.lifetime>=25000&&S.breached===0}
+];
+function achById(id){ return ACHIEVEMENTS.find(a=>a.id===id); }
+function achEarned(id){ return !!S.achieved[id]; }
+function achState(a){
+  if(achEarned(a.id)) return 'earned';
+  return a.hidden?'hidden':'locked';
+}
+function achCounts(){
+  const total=ACHIEVEMENTS.length, got=Object.keys(S.achieved).length;
+  return {got, total};
+}
+/* Runs after anything that could plausibly complete one. Cheap by design —
+   every test() reads a counter or a small object, never walks history. New
+   unlocks are handed to the UI to announce; data.js does not touch the DOM. */
+let onAchievement=null;      // set by ui.js
+function checkAchievements(){
+  const fresh=[];
+  ACHIEVEMENTS.forEach(a=>{
+    if(S.achieved[a.id]) return;
+    let ok=false;
+    try{ ok=!!a.test(); }catch(e){ ok=false; }   // a broken test must never break a log
+    if(ok){ S.achieved[a.id]=Date.now(); fresh.push(a); }
+  });
+  if(fresh.length){
+    save();
+    if(typeof onAchievement==='function') fresh.forEach(a=>onAchievement(a));
+  }
+  return fresh;
+}
+
+/* ---- the counters the tests above read ----
+   Anything that would otherwise need a walk through months of history lives
+   here as a running total, updated at the moment it happens. */
+function bumpStat(k,v){ S.stats[k]=(S.stats[k]||0)+(v===undefined?1:v); }
+/* Called on every habit log: notices the unusual hours. */
+function noteLogTime(){
+  const h=hourOf(), win=currentWindow();
+  if(win==='am'&&h<6) bumpStat('earlyAM');
+  if(win==='pm'&&h>=0&&h<4) bumpStat('lateNight');
+}
+/* Consecutive days seen at the colmado. */
+function noteColmadoVisit(){
+  const k=sessionDay();
+  if(S.stats.colmadoLast===k) return;
+  const y=new Date(k+'T12:00:00'); y.setDate(y.getDate()-1);
+  S.stats.colmadoRun=(S.stats.colmadoLast===today(y))?(S.stats.colmadoRun||0)+1:1;
+  S.stats.colmadoLast=k; save(); checkAchievements();
+}
+/* How much of the avenue has been driven, end to end, in one session. */
+function noteDrivePos(z){
+  if(S.stats.aveLo===undefined||z<S.stats.aveLo) S.stats.aveLo=z;
+  if(S.stats.aveHi===undefined||z>S.stats.aveHi) S.stats.aveHi=z;
+  const span=(S.stats.aveHi||0)-(S.stats.aveLo||0);
+  if(span>(S.stats.aveSpan||0)) S.stats.aveSpan=span;
 }

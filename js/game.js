@@ -1724,7 +1724,10 @@ const COLMADO_LINES=[
   'The colmado guy nods at you without looking up from the counter.',
   'Kids run past chasing a chichigua kite down the block.'
 ];
-function colmadoGreet(){ toast(COLMADO_LINES[Math.floor(Math.random()*COLMADO_LINES.length)]); }
+function colmadoGreet(){
+  noteColmadoVisit();
+  toast(COLMADO_LINES[Math.floor(Math.random()*COLMADO_LINES.length)]);
+}
 function checkInteract(){
   let best=null,bd=1e9;
   spots().forEach(s=>{ const d=Math.hypot(s.p.x-player.pos.x,s.p.z-player.pos.z); if(d<s.r&&d<bd){bd=d;best=s;} });
@@ -2339,6 +2342,8 @@ function tick(){
     driveCar(dt);
     updateSpeedo();
     updateEngineAudio(carSpeedNow(), driveInput.gas, !!driveInput.brake);
+    // VUELTA LARGA: how far along the avenue you have actually driven
+    if(Math.abs(world.car.position.x-AVE_X)<AVE_W) noteDrivePos(world.car.position.z);
   } else {
     let moving=false;
     const seek=seekTarget(player.pos, moveTarget, 7.2, dt);
