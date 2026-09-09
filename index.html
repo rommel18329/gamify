@@ -37,6 +37,7 @@
     <div id="homeActions">
       <button class="bigbtn" onclick="enterWorldSafe()">ENTER THE WORLD</button>
       <button class="bigbtn ghost wide" onclick="openTracks()">WHAT YOU'RE BUILDING</button>
+      <button class="bigbtn ghost wide" onclick="openBadges()">BADGES</button>
       <div class="hrow">
         <button class="bigbtn ghost" onclick="openStats()">STATS</button>
         <button class="bigbtn ghost" onclick="openWindowSettings()">HOURS</button>
@@ -97,6 +98,11 @@
   <div id="sheetBody"></div>
 </div></div>
 
+<!-- An unlock announces itself with the badge, not a line of text. Lives
+     OUTSIDE #game so it fires on the core path too — most achievements
+     complete while logging habits, where the 3D world isn't even loaded. -->
+<div id="achToast"></div>
+
 <div class="toast" id="toast"></div>
 
 <!-- Load order matters: errors.js installs the global error handler before anything
@@ -114,6 +120,7 @@
      habit list; nothing on the core path touches THREE. -->
 <script src="js/errors.js"></script>
 <script src="js/data.js"></script>
+<script src="js/badges.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/vendor/three.min.js"></script>
 <script src="js/vendor/GLTFLoader.js"></script>

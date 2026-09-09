@@ -45,6 +45,8 @@ js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
 js/vendor/cannon.js  cannon.js (the original, not cannon-es), vendored
                      verbatim, MIT licensed — drives the car, see "Car physics"
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
+js/badges.js         procedural achievement badge art on canvas (no THREE) —
+                     loads before ui.js, on the core path, see "Achievements"
 js/carphysics.js     from-scratch car physics engine (no THREE, no DOM) — the
                      fallback if vendor/cannon.js fails to load, see "Car physics"
 js/models.js         loads the CC0 rigged characters + car, recolours them into
@@ -908,6 +910,49 @@ conventions. Same for car underglow.
 be reset in `backToTitle()` or the registries keep a dead scene alive.
 Camera sweep and alarm strobe are driven from `tick()` through those
 registries, not per-object callbacks.
+
+## Achievements
+
+`ACHIEVEMENTS` in `js/data.js` — 20 of them, 6 hidden. Definitions and `test()`
+conditions live in data.js (no DOM); the badge art lives in `js/badges.js`,
+which loads **before ui.js on the core path** and pulls in no THREE.
+
+**Every badge is its own drawing** — a different silhouette (triangle, crown
+cap, slab, map, shield, chain, ribbon, dial, teardrop, arch, domino, gear,
+banknote stack, moon, ticket, umbrella, cracked slab, swatch card, empty
+frame) with its own motif and palette. Not one frame recoloured: a wall of
+identical discs is a spreadsheet, and the collection only reads as a
+collection when the shapes are told apart at thumbnail size. `badges_test.js`
+pixel-hashes all of them and **fails on any two that match**.
+
+Painted on canvas at runtime like `detailMap()` does its textures, so the set
+costs nothing to download and there's no sprite sheet to keep in sync. Cached
+per `(id,size,state)` forever.
+
+- A **locked** badge is the same drawing desaturated in place, not a
+  placeholder — you can see the shape you're missing.
+- A **hidden** one is a marked silhouette. Hidden is the point: a goal you can
+  see is a checklist, and hidden ones are the only unpredictable surface left
+  once the visible ones are known.
+- `BADGE_ART` misses fall back to `plaque()`, deliberately plain so an
+  undrawn badge looks undrawn rather than quietly passing for a real one.
+
+`checkAchievements()` runs after every log, purchase and incident, so **keep
+`test()` cheap** — read a counter, never walk history. Anything that would
+need a year of log is a running counter in `S.stats` instead (`earlyAM`,
+`lateNight`, `colmadoRun`, `waterDays`, `aveSpan`, `jackpot`, `rebuilt`).
+A throwing `test()` is caught and treated as false: a broken achievement must
+never break a habit log.
+
+`onAchievement` is the hook ui.js sets — data.js raises unlocks through it
+rather than touching the DOM. The toast shows **the badge**, not a line of
+text; drawing twenty different things is pointless if the unlock doesn't show
+you the new one. `#achToast` lives outside `#game` because most achievements
+complete while logging habits, where the 3D world isn't loaded.
+
+`TERCO` (lost a long streak, came back) is recorded in `rollDay()` rather than
+tested from history — "used to have 20 days" isn't visible in the log once
+it's gone.
 
 ## Known deliberate non-features
 
