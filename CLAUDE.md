@@ -34,6 +34,13 @@ No build step, no dependencies. Two levels:
   never completes; opened over `http://`, everything works. Confirmed both
   ways before writing this down, not assumed.
 
+- **Build the single file** (`node tools/build_single.js`) **to get a
+  double-clickable `sprout.html`** that needs no server at all. This is the
+  answer to both of the above: it inlines everything, fetches nothing, and is
+  also what gets published as the shareable artifact. See "One file, no
+  server, no CSP" below for the two separate things it has to survive and why
+  a data:-URI build is NOT one of them.
+
 There is no test suite. Verify changes by actually loading the page and
 clicking through: ENTER the world, open LOG/STATS/the security and garage
 sheets, and check the browser console for errors. A quick way to drive it
@@ -173,6 +180,70 @@ after ENTER and after any lighting/geometry/camera change," and a build that
 passes every check yet screenshots blank is worse than one that fails
 loudly. Don't remove this flag to chase a theoretical performance gain
 without re-confirming screenshots still work without it first.
+
+## One file, no server, no CSP (`tools/build_single.js`)
+
+`node tools/build_single.js` writes `sprout.html` — the entire game as one
+self-contained file. It is what gets published as the shareable artifact, and
+it is the only way to open the 3D world without running a server. Two
+*separate* restrictions shaped it, and a build that handles only one of them
+looks fine locally and is broken for the player:
+
+- **`file://` refuses module scripts.** Chrome blocks them by CORS (origin
+  `null`) with no fallback. Measured: opened via `file://`, all six engine
+  modules fail, `window.THREE` stays undefined, and every ENTER tap answered
+  "STILL LOADING — ONE SECOND" forever. `enterWorldSafe()` now names this case
+  explicitly instead of implying a wait that will never end.
+- **The artifact host's CSP refuses `data:` in script position.** This is the
+  one that mattered most and the one that is easy to get wrong, because it
+  does not reproduce locally: a `data:` URI in an **import map** works
+  perfectly over `file://` (no CSP there), so a data:-URI build passes every
+  local test and is still dead the moment it is published. Measured behind a
+  realistic policy: `Refused to load the script 'data:text/javascript;base64,…'`
+  for every module, `window.THREE` undefined, ENTER hangs — the identical
+  symptom as the `file://` case, from a completely different cause. **An
+  import map cannot point at an inline `<script>`**, so there is no way to
+  keep ES modules and satisfy this at once.
+
+So the build **fetches nothing at all**, by two mechanisms:
+
+- `tools/esm_to_classic.js` rewrites each engine ES module into a strict-mode
+  IIFE (`import {A} from 'three'` → `const {A} = __THREE_NS__`, `export {…}` →
+  the IIFE's return value) and they are concatenated into ONE plain inline
+  `<script>`. It is a deliberately dumb transform, safe only because every
+  vendored module has the same tidy shape (verified before it was written: no
+  `import.meta`, no `export default`, no dynamic import, imports only at the
+  top). It **throws** on anything it cannot account for rather than emitting a
+  subtly wrong bundle. If you vendor a new module, check that shape first.
+  `'use strict'` inside each IIFE is not tidiness — ES modules are implicitly
+  strict and a bare function body is not.
+- Models are handed to `GLTFLoader.parse()` / `OBJLoader.parse()` as raw
+  base64 decoded in-page, **not** as `data:` URIs. A `data:` URI still goes
+  through the loader's `FileLoader`, which is an XHR — governed by CSP's
+  `connect-src`, a *different* directive from the one above. Measured: with
+  `connect-src 'self'`, every model came back "Refused to connect to
+  `data:model/gltf-binary…`", the game silently fell through to the
+  `makePerson()`/`makeCar()` primitives, and the good characters and car were
+  simply gone with no visible error. `parse()` removes the network step, so no
+  policy can reach it.
+
+Verify a change to this build the way it was verified the first time: serve
+the output behind a CSP **tighter** than the real one (`script-src` without
+`data:`, `connect-src 'self'`) and confirm `THREE.REVISION`, `enterWorld`,
+`VRMLoaderPlugin`, `ASSETS.chars` (both rigs) and `ASSETS.car` are all really
+there — not just that the page rendered. Falling back to primitives throws no
+error and looks like success.
+
+The core path keeps its own separate, early `<script>` in this build too. An
+earlier draft put all eight files in one blob behind the engine, which made
+the habit checklist wait on ~5 MB of three.js — the exact thing "the default
+screen must never load the 3D world" exists to prevent, reintroduced by the
+build script rather than the app.
+
+Known gap in the artifact build only: the BACKUP SAVE sheet's export is a
+plain download link, and the artifact viewer never grants pages download
+permission, so it does nothing there. It works normally in the served app and
+in a local `sprout.html`.
 
 ## State (`S` in `js/data.js`)
 
