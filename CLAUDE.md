@@ -21,11 +21,18 @@ weren't sure was wanted) rather than merging through it.
 
 ## Running it
 
-No build step, no dependencies. Either:
-- Open `index.html` directly in a browser, or
-- Serve the folder (`python3 -m http.server`) and open it over http — needed
-  if you want the Google Fonts `@import` in `css/styles.css` to load, though
-  the app works fine without it (falls back to a system monospace font).
+No build step, no dependencies. Two levels:
+- **Open `index.html` directly in a browser** for the core path (the habit
+  checklist, LOG/STATS/BADGES/HOURS/BACKUP) — fully functional over `file://`,
+  confirmed by tapping a habit and watching cash actually move with no server
+  running.
+- **Serve the folder** (`python3 -m http.server`) **to get the 3D world.**
+  This is new, and it's a real requirement, not a nicety like the Google Fonts
+  `@import` used to be: the engine now loads as ES modules (see "The engine is
+  ES modules now" below), and Chrome refuses to fetch a module script from
+  `file://` — CORS blocks it outright. Opened via `file://`, ENTER THE WORLD
+  never completes; opened over `http://`, everything works. Confirmed both
+  ways before writing this down, not assumed.
 
 There is no test suite. Verify changes by actually loading the page and
 clicking through: ENTER the world, open LOG/STATS/the security and garage
@@ -38,10 +45,16 @@ visual and won't throw.
 ## File layout
 
 ```
-index.html          shell: markup + <script> tags in load order, nothing else
+index.html          shell: markup, a small ES-module bootstrap, then <script>
+                     tags in load order — see "The engine is ES modules now"
 css/styles.css       all styling
 js/errors.js         window.onerror -> visible on-screen error box (loads first)
-js/vendor/three.min.js   Three.js r128, vendored verbatim, MIT licensed
+js/vendor/three.module.js     three.js 0.169, ES module, vendored verbatim, MIT
+js/vendor/three-vrm.module.js @pixiv/three-vrm 2.1.3, ES module, MIT — VRM
+                     (VRoid) character loading, see "VRM characters"
+js/vendor/jsm/       GLTFLoader/OBJLoader/MTLLoader/SkeletonUtils/
+                     BufferGeometryUtils, all ES modules, vendored verbatim
+                     from three.js 0.169's own examples/jsm/
 js/vendor/cannon.js  cannon.js (the original, not cannon-es), vendored
                      verbatim, MIT licensed — drives the car, see "Car physics"
 js/data.js           state, save/load, economy, habits/vitals math (no DOM/THREE)
@@ -50,23 +63,116 @@ js/badges.js         procedural achievement badge art on canvas (no THREE) —
 js/carphysics.js     from-scratch car physics engine (no THREE, no DOM) — the
                      fallback if vendor/cannon.js fails to load, see "Car physics"
 js/models.js         loads the CC0 rigged characters + car, recolours them into
-                     outfits, drives their animation mixers
-assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl)
+                     outfits, drives their animation mixers; also VRM loading,
+                     see "VRM characters"
+assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl);
+                     assets/characters/vrm/ holds the one bundled VRM preset
 js/game.js           the 3D scene: world building (one function per structure —
                      buildHouse/buildGarage/buildColmado/etc., all called from
                      buildWorld()), character/car/prop meshes, camera, input,
                      movement (walk + drive), the render loop
-js/ui.js             DOM glue: renders sheets (LOG/STATS/SECURITY/GARAGE/BACKUP)
-                     from state in data.js, wires up onclick handlers
+js/ui.js             DOM glue: renders sheets (LOG/STATS/SECURITY/GARAGE/BACKUP/
+                     CHARACTER) from state in data.js, wires up onclick handlers
 manifest.json, icon.svg   PWA install metadata
 ```
 
-Load order in `index.html` matters: `errors.js` must install the error
-handler before anything else can throw; `three.min.js` before `game.js`
-touches `THREE`; `data.js` before `game.js`/`ui.js` read state or economy
-functions. Everything is classic (non-module) scripts sharing one global
-scope on purpose — keep it that way unless you're deliberately introducing
-a build step, since the app is meant to be openable with no tooling.
+Load order in `index.html` matters, and it now has two layers. `errors.js`,
+`data.js`, `badges.js` and `ui.js` are still plain classic scripts, loaded
+first, completely unchanged in shape — they render the core path before any
+of the engine below has even started fetching. A small `<script
+type="module">` bootstrap comes next: it builds a real, mutable `window.THREE`
+(an imported module's namespace object is frozen and can't take new
+properties like `THREE.GLTFLoader` — this is `Object.assign({}, ...)` into a
+fresh object, not the module namespace itself), sets `THREE.ColorManagement.
+enabled = false` (see below), and then **dynamically injects** the remaining
+classic scripts — `cannon.js`, `carphysics.js`, `models.js`, `game.js` — each
+with `.async = false` so they still fetch in parallel but execute in the same
+strict order they always did. `game.js`/`models.js`/`carphysics.js` are
+**unchanged in shape**: still classic scripts, still reading a global `THREE`
+the same way they always did — only the bootstrap that builds that global is
+new. The one real consequence: because the bootstrap is inherently async,
+`game.js`-level globals (`enterWorld`, `AVE_Z1`, anything else game.js
+defines) are no longer guaranteed to exist the instant the core path renders,
+the way a fully synchronous classic-script chain guaranteed it. `enterWorldSafe()`
+in `ui.js` already existed for exactly this gap for the real ENTER button; any
+new code (or test) that needs a game.js global before that point needs the
+same `typeof window.enterWorld==='function'` wait — three of this project's
+own Playwright test scripts hit this and needed the same fix when the engine
+was upgraded, see `scratchpad/core_path.js`/`regress.js`/`badges_test.js`.
+
+## The engine is ES modules now
+
+This is the one deliberate exception to "classic scripts, no build step" in
+this codebase, and it exists for exactly one reason: **VRM (VRoid) character
+support.** Modern three.js (>= 0.163) ships **no classic/UMD build at all** —
+only ES modules, confirmed by checking jsdelivr directly (`three@0.160` still
+serves `build/three.min.js`; `three@0.163` and every version since returns
+404 for it, and classic `examples/js/` loaders were already gone even at
+0.160). `@pixiv/three-vrm` — the only actively maintained VRM loader for
+three.js — requires three >= 0.164.1. There is no version of either that
+keeps both "real VRM support" and "plain `<script>` tags, openable via
+`file://`" true at once. Two real paths existed and were weighed:
+
+- **A legacy path**: pin three.js to the last UMD-shipping version (~0.160)
+  and pair it with three-vrm's own last UMD release (0.6.11, the old VRM0-only
+  API, requiring three ^0.137.4) — keeps classic scripts and `file://`
+  entirely, but locks the whole engine ~9 years behind current and gets the
+  unmaintained, VRM0-only loader API.
+- **The path taken**: move to modern three.js (0.169) + three-vrm 2.1.3 as ES
+  modules, with the module-bootstrap bridge described above keeping
+  `game.js`/`models.js`/`carphysics.js`/`ui.js`/`data.js` as classic scripts
+  regardless. `file://` loses the 3D world (see "Running it"); everything
+  else about the app's shape is preserved.
+
+Two things were measured, not assumed, before committing to this — both are
+real behavior changes an upgrade like this can silently introduce, and both
+are exactly the kind of thing this project's rendering conventions already
+warn about getting wrong:
+
+- **Colour management.** Modern three.js turns on a real sRGB-aware lighting
+  pipeline BY DEFAULT (`THREE.ColorManagement.enabled = true`) — every hex
+  colour and every light intensity in this codebase was tuned against r128,
+  which never did this. Rendering this game's own `buildLighting()` numbers
+  (0.42 ambient + 0.46 sun + 0.19 fill) on the ground colour `0x6E7A62`
+  through both engines and reading back the actual pixel:
+  ```
+  r128                                     -> [114,128,105]
+  0.169, ColorManagement ON  (the default) -> [ 63, 71, 57]   ~45% darker
+  0.169, ColorManagement OFF               -> [105,111,101]   within ~8%
+  ```
+  Left on, the whole game renders visibly muddier at every light level — the
+  OPPOSITE failure mode from the documented white-clip risk, but just as
+  real. The bootstrap sets `THREE.ColorManagement.enabled = false` and
+  `renderer.outputColorSpace = THREE.SRGBColorSpace` (the measured-closest
+  match to the old look) for exactly this reason — if you ever see the game
+  looking uniformly darker or duller than it should, check this hasn't been
+  reverted before looking anywhere else.
+- **The white-clip threshold moved — in the safe direction.** Swept the same
+  ground plane's light intensity from 0.5x to 3x in both engines: r128 clips
+  to solid white at 2.5x; 0.169 (ColorManagement off) is still only
+  `[175,184,168]` at 3x. The new engine's tone response is more compressed,
+  so "light intensities must not sum past ~1.0" (see the rendering
+  conventions below) has MORE headroom now than it used to, not less — but
+  re-verify with the same method (sample a real pixel, don't eyeball it) if
+  you ever retune the lighting rig again, rather than assuming either
+  engine's number still applies.
+
+**`preserveDrawingBuffer: true` on the `WebGLRenderer`** is new, and it's not
+a leftover default — it's load-bearing for this project's own QA method.
+Without it, under headless Chromium + SwiftShader (`scratchpad/*.js`'s own
+test harness), a frame renders correctly every single time — real draw
+calls, real triangle counts, an immediate synchronous `render()` +
+`readPixels()` call shows real content — but a SEPARATELY issued
+`page.screenshot()` or `gl.readPixels()` call reads back solid `[0,0,0,0]`
+on every pixel, canvas included. Confirmed as a genuine r128 -> 0.169 change
+under this exact harness, not a pre-existing flake: the identical test
+against the old engine, same flags, same everything, screenshots correctly
+every time. A real player's browser composites each frame live and never
+hits this gap — but this project's whole verification method is "screenshot
+after ENTER and after any lighting/geometry/camera change," and a build that
+passes every check yet screenshots blank is worse than one that fails
+loudly. Don't remove this flag to chase a theoretical performance gain
+without re-confirming screenshots still work without it first.
 
 ## State (`S` in `js/data.js`)
 
@@ -447,6 +553,91 @@ Outfits come from `FITS` in `js/models.js`, keyed by each model's own material
 names (`Skin`, `Hair`, `Purple`, …). Material names differ per model and
 unknown keys are ignored, so one colour swap turns a couple of downloads into a
 whole block of different-looking people.
+
+### VRM characters
+
+A real VRoid/VRM character is a **third layer**, above the
+`modelPerson()||makePerson()` pair, not a replacement for either — the
+PLAYER's character only. `buildPlayer()` builds the normal placeholder
+(exactly as before, synchronously) and THEN calls `loadPlayerBody()`, which
+is entirely optional and entirely async: if `S.person.character` names a VRM
+(`{type:'preset',id:'avatarA'}` or `{type:'custom'}`), it loads in the
+background and swaps the model in on success; on failure, on a slow
+connection, or with `type:'default'`, the placeholder that was ALREADY on
+screen just stays there. Never a blocked ENTER, never a broken world — same
+"a bad asset costs you the good character, never a black screen" rule
+`modelPerson()||makePerson()` already lives by.
+
+**Where a character comes from:**
+- `VRM_PRESETS` in `js/models.js` — one bundled file,
+  `assets/characters/vrm/AvatarSample_A.vrm` (pixiv's own official VRoid
+  Studio sample; the licence permits alteration and distribution but is
+  **not CC0** — it also excludes for-profit corporations, which is fine for
+  this personal project and is exactly why UPLOAD, not more presets, is the
+  intended path: a VRM is ~15MB, roughly 10x every other character asset in
+  this repo combined, and that cost is only worth paying for a character
+  that's actually yours).
+- **Upload your own** — make one free at **vroid.com** (VRoid Studio),
+  export the `.vrm`, pick it in the CHARACTER sheet (`openCharacter()` in
+  `ui.js`). Read via `FileReader` as an `ArrayBuffer` and stored in
+  **IndexedDB** (`saveCustomVRM()`/`loadCustomVRM()` in `js/models.js`),
+  deliberately NOT in `S`: a VRM is nowhere near `localStorage`'s realistic
+  quota (5-10MB, shared with the actual save), and `S` must "stay strictly
+  JSON-serialisable" (see State above) — `S.person.character` only ever
+  holds the small marker `{type:'custom'}`, never the bytes.
+
+**Character selection happens from the TITLE screen** (`openCharacter()`,
+reached the same way `openTracks()`/`openBadges()` are), deliberately not
+from inside the 3D world — a change takes effect on the NEXT `enterWorld()`,
+so there is no live in-world swap to build. `openCharacter()` itself has to
+tolerate being tapped before `models.js` has loaded (the core path is
+usable before the engine finishes, on purpose — see "The engine is ES
+modules now"): it checks `typeof VRM_PRESETS!=='undefined'` and shows "still
+loading" for the preset rows rather than throwing, the same class of guard
+`enterWorldSafe()` already used for ENTER itself.
+
+Four things bite here, all found by measuring rather than assumed:
+
+- **VRM 0.x faces -Z.** Every other character and the car in this world
+  faces +Z (see "All three car representations face +Z" under Car physics).
+  VRM 1.0 fixed this to the usual +Z convention, but VRM 0.x (what VRoid
+  Studio and most existing VRM files actually export) still faces -Z —
+  found by rendering a VRM straight-on and photographing the back of the
+  head. `three-vrm`'s own `VRMUtils.rotateVRM0(vrm)` is the fix, called only
+  when `vrm.meta.metaVersion==='0'`.
+- **A VRM's face is literally invisible without `vrm.update(dt)` every
+  frame**, not just posed wrong. three-vrm drives the mesh's actual (raw)
+  skinned skeleton from a separate, always-clean "normalized" rest rig, and
+  `.update()` is what copies that pose across — skip it and
+  `getNormalizedBoneNode()` still reports a perfect T-pose while the MESH
+  itself sits wherever the loader left the raw skeleton, which one time
+  produced a character with an arm stretched clean across the screen despite
+  every bone position measuring completely normal. `updateVRM(dt)` in
+  `tick()` (a registry parallel to `updateAnimated(dt)`'s `ANIMATED` mixers,
+  not folded into it — a `THREE.AnimationMixer` and a VRM instance both
+  expose `.update(dt)` but do entirely different things with it) covers this
+  for every loaded VRM, every frame, moving or standing — same reasoning as
+  the mixer-ticking rule right above this section.
+- **DRIP accessories have to be re-applied after the swap, not just once in
+  `buildPlayer()`.** `dripAccessories()` runs on the placeholder BEFORE the
+  VRM finishes loading; without calling it again on `vrm.scene` inside the
+  swap, switching to a VRM character would silently drop every hat/glasses/
+  chain purchase — exactly the failure "a failed model download must never
+  cost you an upgrade you paid for" already rules out for the GLB fallback,
+  just arriving through a different door (a *successful* swap, not a failed
+  one).
+- **No walk-cycle animation yet.** A raw VRoid export ships a rig and
+  nothing else — no clips, unlike the Quaternius GLBs `modelPerson()` plays
+  directly. Retargeting this world's walk cycle onto an arbitrary VRM's
+  humanoid skeleton (mapping bone names, handling proportion differences) is
+  real, separate work, deliberately not done here. `stepVRM()` in
+  `js/models.js` does what's honest with only a `moving` boolean and no
+  elapsed-time input — a small forward lean on the measured `spine` bone —
+  and always returns `true`, which matters for a reason beyond animation
+  quality: `stepAnim()` returning `false` falls through to `tick()`'s
+  primitive-limb branch (`ud.legL.rotation.x=...`), which reaches for
+  `userData` fields only `makePerson()` ever sets and would throw on any VRM
+  character.
 
 ## Rendering conventions (anime/toon look)
 

@@ -39,6 +39,7 @@
       <button class="bigbtn ghost wide" onclick="openTracks()">WHAT YOU'RE BUILDING</button>
       <button class="bigbtn ghost wide" onclick="openAutomaticity()">WHAT ALREADY RUNS WITHOUT YOU</button>
       <button class="bigbtn ghost wide" onclick="openBadges()">BADGES</button>
+      <button class="bigbtn ghost wide" onclick="openCharacter()">CHARACTER</button>
       <div class="hrow">
         <button class="bigbtn ghost" onclick="openStats()">STATS</button>
         <button class="bigbtn ghost" onclick="openWindowSettings()">HOURS</button>
@@ -106,12 +107,6 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Load order matters: errors.js installs the global error handler before anything
-     else can throw; vendor/three.min.js must exist before data/game/ui touch THREE;
-     data.js defines state + economy that game.js and ui.js both read from;
-     carphysics.js is a standalone, THREE-free car physics engine that game.js
-     builds a CarPhysics instance from in buildCar() — the fallback if
-     vendor/cannon.js (a real rigid-body physics engine) fails to load. -->
 <!-- ORDER MATTERS, and it is not the obvious one.
      errors.js, data.js and ui.js come FIRST so the core path renders the
      moment they parse — before ~1MB of Three.js and cannon.js is fetched and
@@ -123,14 +118,81 @@
 <script src="js/data.js"></script>
 <script src="js/badges.js"></script>
 <script src="js/ui.js"></script>
-<script src="js/vendor/three.min.js"></script>
-<script src="js/vendor/GLTFLoader.js"></script>
-<script src="js/vendor/SkeletonUtils.js"></script>
-<script src="js/vendor/MTLLoader.js"></script>
-<script src="js/vendor/OBJLoader.js"></script>
-<script src="js/vendor/cannon.js"></script>
-<script src="js/carphysics.js"></script>
-<script src="js/models.js"></script>
-<script src="js/game.js"></script>
+
+<!-- THE ENGINE, LOADED AS ES MODULES -- everything below this comment is the
+     one deliberate exception to "classic scripts, no build step" in this
+     file. It exists for one reason: VRM (VRoid) character support. Modern
+     three.js (>= 0.163) ships NO classic/UMD build at all -- only ES modules
+     -- and @pixiv/three-vrm (the VRM loader) requires that modern three.js.
+     There was no version of either that kept both "real VRM support" and
+     "plain <script> tags" true at once; see CLAUDE.md's "The engine is ES
+     modules now" section for the full reasoning and what was measured before
+     this was decided.
+
+     game.js, models.js, carphysics.js, ui.js and data.js are UNCHANGED in
+     shape: still classic scripts, still reading a global THREE the same way
+     they always did. This bootstrap's only job is to build that global THREE
+     (a real, mutable object -- an imported module namespace is frozen and
+     cannot take new properties, so this is Object.assign(), not the module
+     itself) and then inject the classic scripts itself, in order, once THREE
+     exists. That preserves every load-order guarantee documented above
+     (errors.js first, data.js before game.js, etc.) for everything except
+     this one bootstrap step. -->
+<script type="importmap">
+{"imports":{
+  "three":"./js/vendor/three.module.js",
+  "three/addons/loaders/GLTFLoader.js":"./js/vendor/jsm/loaders/GLTFLoader.js",
+  "three/addons/loaders/OBJLoader.js":"./js/vendor/jsm/loaders/OBJLoader.js",
+  "three/addons/loaders/MTLLoader.js":"./js/vendor/jsm/loaders/MTLLoader.js",
+  "three/addons/utils/SkeletonUtils.js":"./js/vendor/jsm/utils/SkeletonUtils.js",
+  "@pixiv/three-vrm":"./js/vendor/three-vrm.module.js"
+}}
+</script>
+<script type="module">
+import * as THREE_NS from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+/* Colour management, measured, not guessed. Modern three.js turns on a real
+   sRGB-aware lighting pipeline by DEFAULT (THREE.ColorManagement.enabled =
+   true) -- every hex colour and every light intensity in this codebase was
+   picked against r128, which never did this. Rendering this game's own
+   buildLighting() numbers (0.42 ambient + 0.46 sun + 0.19 fill on the ground
+   colour 0x6E7A62) through both engines and reading back the actual pixel:
+     r128                                    -> [114,128,105]
+     0.169, ColorManagement ON  (the default) -> [ 63, 71, 57]   -- ~45% darker
+     0.169, ColorManagement OFF               -> [105,111,101]  -- within ~8%
+   Left on, the entire game renders visibly muddier at every intensity, not
+   just close to the documented white-clip line -- the opposite failure mode
+   from what "sum must not exceed ~1.0" warns about, but just as real. Turning
+   it off is what gets back close to the tuned r128 look, and it also turned
+   out to make white-clip LESS likely, not more: swept the ground plane's own
+   intensity from 0.5x to 3x in both engines -- r128 clips to solid white at
+   2.5x, 0.169 (ColorManagement off) is still only [175,184,168] at 3x. The
+   explicit outputColorSpace matches the default and is set anyway so this
+   doesn't silently drift if that default ever changes upstream. */
+THREE_NS.ColorManagement.enabled = false;
+
+const THREE = Object.assign({}, THREE_NS, { GLTFLoader, OBJLoader, MTLLoader, SkeletonUtils });
+window.THREE = THREE;
+window.VRMLoaderPlugin = VRMLoaderPlugin;
+window.VRMUtils = VRMUtils;
+
+/* Now load the rest of the app exactly as it always loaded: classic scripts,
+   in order. A dynamically-inserted <script src> defaults to fetching async
+   and running as soon as it's ready -- REGARDLESS of source order -- unless
+   `.async` is explicitly set false, which restores the normal "fetch in
+   parallel, run in order" behaviour every one of these files depends on
+   (cannon.js before carphysics.js's fallback check, models.js before
+   game.js touches ASSETS, and so on). */
+['js/vendor/cannon.js','js/carphysics.js','js/models.js','js/game.js'].forEach(src=>{
+  const s=document.createElement('script');
+  s.src=src; s.async=false;
+  document.body.appendChild(s);
+});
+</script>
 </body>
 </html>

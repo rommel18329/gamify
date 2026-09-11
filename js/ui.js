@@ -442,6 +442,77 @@ function openBadges(){
   openSheet('BADGES — '+cnt.got+'/'+cnt.total);
 }
 
+/* ---- CHARACTER: real VRoid/VRM bodies -----------------------------------
+   Reached from the title screen, same as WHAT YOU'RE BUILDING and BADGES,
+   deliberately not from inside the 3D world — a selection here takes effect
+   on the NEXT enterWorld(), so there is no live in-world swap to build or
+   test; buildPlayer()/loadPlayerBody() in game.js do the actual loading.
+   models.js is what defines loadVRM()/saveCustomVRM()/etc. — this sheet is
+   pure DOM glue, the same division CLAUDE.md documents everywhere else in
+   this file. */
+function openCharacter(){
+  /* Reachable from the title screen, which is deliberately usable before the
+     3D engine (and models.js, where VRM_PRESETS/loadVRM live) has finished
+     loading — same race enterWorldSafe() exists to cover for ENTER itself.
+     Only the PRESET rows need models.js; DEFAULT and the upload option are
+     pure S.person.character bookkeeping and work with data.js/ui.js alone,
+     so this degrades to "presets not shown yet" rather than a hard block. */
+  const presetsReady=typeof VRM_PRESETS!=='undefined';
+  const ch=(S.person&&S.person.character)||{type:'default'};
+  const is=(type,id)=>ch.type===type&&(type!=='preset'||ch.id===id);
+  let html='<div class="note">A real VRoid character, not a recolour — make your own free '+
+    'at <b>vroid.com</b> (VRoid Studio) and upload the .vrm it exports, or start with the '+
+    'bundled sample. Takes effect the next time you ENTER THE WORLD.</div>';
+  html+='<div class="tkh">CHARACTER</div>';
+  html+='<div class="row'+(ch.type==='default'?' done':'')+'" data-char="default">'+
+    '<div class="ck">'+(ch.type==='default'?'✓':'')+'</div>'+
+    '<div class="nm">Default<span class="cue">The original hand-built look</span></div></div>';
+  if(presetsReady){
+    Object.keys(VRM_PRESETS).forEach(id=>{
+      const p=VRM_PRESETS[id], sel=is('preset',id);
+      html+='<div class="row'+(sel?' done':'')+'" data-char="preset:'+id+'">'+
+        '<div class="ck">'+(sel?'✓':'')+'</div>'+
+        '<div class="nm">'+p.name+'<span class="cue">'+p.credit+'</span></div></div>';
+    });
+  } else {
+    html+='<div class="tkdone">Presets are still loading — give it a second and reopen this.</div>';
+  }
+  const customSel=ch.type==='custom';
+  html+='<div class="row'+(customSel?' done':'')+'" data-char="custom">'+
+    '<div class="ck">'+(customSel?'✓':'')+'</div>'+
+    '<div class="nm">Your own upload<span class="cue">'+
+    (customSel?'Currently selected — tap to replace it':'Pick a .vrm file exported from VRoid Studio')+
+    '</span></div></div>';
+  html+='<input type="file" id="vrmFileInput" accept=".vrm" style="display:none">';
+  document.getElementById('sheetBody').innerHTML=html;
+  document.querySelectorAll('#sheetBody [data-char]').forEach(el=>{
+    bindTap(el,()=>{
+      const v=el.getAttribute('data-char');
+      if(v==='custom'){ document.getElementById('vrmFileInput').click(); return; }
+      const [type,id]=v.split(':');
+      S.person.character=id?{type,id}:{type};
+      save(); openCharacter();
+      toast(type==='default'?'Back to the original look — applies next ENTER'
+                             :'Character set — applies next ENTER');
+    });
+  });
+  document.getElementById('vrmFileInput').addEventListener('change',e=>{
+    const f=e.target.files[0]; if(!f) return;
+    if(!/\.vrm$/i.test(f.name)){ toast('That is not a .vrm file'); return; }
+    if(typeof saveCustomVRM!=='function'){ toast('VRM support did not load'); return; }
+    const reader=new FileReader();
+    reader.onload=()=>{
+      saveCustomVRM(reader.result, ()=>{
+        S.person.character={type:'custom'}; save();
+        toast('Uploaded — applies next ENTER'); openCharacter();
+      }, err=>toast('Could not save: '+err.message));
+    };
+    reader.onerror=()=>toast('Could not read that file');
+    reader.readAsArrayBuffer(f);
+  });
+  openSheet('CHARACTER');
+}
+
 /* An unlock shows the badge itself. A line of text would be a notification;
    the point of drawing twenty different things is that you see the new one. */
 function showAchToast(a){

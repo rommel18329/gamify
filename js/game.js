@@ -1827,6 +1827,50 @@ function buildPlayer(){
   playerGroup.position.copy(plotToWorld(homePlot(),2,6));
   scene.add(playerGroup);
   player={pos:playerGroup.position,yaw:Math.PI,walkT:0,targetYaw:Math.PI};
+  loadPlayerBody();   // async upgrade to a VRM character, if one is selected
+}
+/* Swaps playerGroup for a VRM character if S.person.character names one —
+   see "VRM characters" in CLAUDE.md. Entirely optional and entirely async:
+   buildPlayer() has ALREADY put a real, fully-functional character on
+   screen by the time this runs, so a slow connection, a bad upload, or no
+   VRM loader at all (models.js missing, three-vrm failed to load) costs
+   nothing more than staying on that placeholder — never a blocked ENTER,
+   never a broken world. Character selection happens from the TITLE screen
+   (openCharacter() in ui.js), so this only ever needs to run once per
+   enterWorld() — there is no live in-world swap to support. */
+function loadPlayerBody(){
+  if(typeof loadVRM!=='function') return;
+  const ch=(S.person&&S.person.character)||{type:'default'};
+  if(ch.type==='default') return;
+  const spawnPos=playerGroup.position.clone(), spawnYaw=playerGroup.rotation.y;
+  const swap=(vrm)=>{
+    if(!scene||!playerGroup) return;   // backToTitle() ran before this resolved
+    const old=playerGroup;
+    vrm.scene.position.copy(spawnPos);
+    vrm.scene.rotation.y=spawnYaw;
+    vrm.scene.visible=old.visible;
+    scene.remove(old);
+    scene.add(vrm.scene);
+    playerGroup=vrm.scene;
+    // dripAccessories() already ran once, on the OLD placeholder group, inside
+    // buildPlayer() -- that copy is discarded along with `old` above. Without
+    // running it again HERE, switching to a VRM character would silently drop
+    // every DRIP accessory (hat/glasses/chain) the player paid for, which is
+    // exactly what CLAUDE.md's own rule for this code says must never happen:
+    // "a failed model download must never cost you an upgrade you paid for" —
+    // a successful VRM swap costing one is the same failure by another door.
+    dripAccessories(vrm.scene, homePlot().upgrades.drip||{});
+    // player.pos/yaw are untouched on purpose: they're the SAME objects the
+    // old playerGroup was tracking, and tick()'s walk branch already copies
+    // them onto whichever object `playerGroup` currently points at, every
+    // frame — reassigning them here would just be a second source of truth.
+  };
+  if(ch.type==='preset'){
+    const preset=VRM_PRESETS[ch.id]; if(!preset) return;
+    loadVRM(ASSET_BASE+'characters/vrm/'+preset.file, swap, ()=>{});
+  } else if(ch.type==='custom'&&typeof loadCustomVRM==='function'){
+    loadCustomVRM(swap, ()=>{});
+  }
 }
 
 /* marker */
@@ -2570,6 +2614,7 @@ function tick(){
     world.dog.rotation.y=Math.cos(clock.elapsedTime*.5)>0?0:Math.PI;
   }
   updateAnimated(dt);   // every rigged character, moving or standing
+  updateVRM(dt);        // spring bones (hair, ribbons) + look-at on VRM characters
   updateIntruders(dt);
   updateWanderers(dt);
   updatePropAnims(clock.elapsedTime);
@@ -2651,7 +2696,23 @@ function startWorld(){
     const inc=S.incident; nightMode=!!(inc&&!inc.done);
     const cv=document.getElementById('cv');
     if(!renderer){
-      renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+      /* preserveDrawingBuffer:true -- found migrating off r128. Under headless
+         Chromium + SwiftShader (this project's own screenshot-testing setup),
+         a WebGLRenderer built with the WebGL default (preserveDrawingBuffer:
+         false) renders every frame correctly -- draw calls, triangle counts
+         and an immediate synchronous render()+readPixels() all show real
+         content -- but a SEPARATELY issued page.screenshot() or gl.readPixels()
+         call (anything outside that same synchronous tick) reads back solid
+         [0,0,0,0] on every pixel, canvas included. Confirmed as a genuine
+         r128->0.169 behavior change, not a pre-existing flake: the identical
+         test against the old engine, same harness, same flags, screenshots
+         correctly every time. A real player's browser composites each frame
+         live and never hits this gap, but this project's whole verification
+         method is "screenshot after ENTER and after any lighting/geometry/
+         camera change" -- a build that can pass every check yet screenshot
+         blank is worse than one that fails loudly, so this stays set rather
+         than treated as a test-only workaround. */
+      renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
       bindControls();
       // iOS kills the WebGL context when the app backgrounds (a call, another app,
       // even a long lock-screen) and the canvas goes permanently black without this.
@@ -2763,6 +2824,7 @@ function backToTitle(){
   stopEngineAudio();   // leaving mid-drive must not carry the engine into the title screen
   if(musicGain&&audioCtx) musicGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.2);
   clearAnimated();
+  clearVRM();   // stop ticking springs/look-at on a character no longer on screen
   clearPropAnims(); plotGroups=[];
   const evb=document.getElementById('exitVehicleBtn'); if(evb) evb.style.display='none';
   const dhb=document.getElementById('driveHud'); if(dhb) dhb.style.display='none';

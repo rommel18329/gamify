@@ -122,7 +122,20 @@ function blank(){
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
     vehicle:{tier:0,mods:{tires:0,wheels:0,tint:0,tune:0},paint:'#6E7B8B'},
-    person:{skin:'#C9884F',outfit:'#2C3242',wardrobe:0,grooming:0},
+    person:{skin:'#C9884F',outfit:'#2C3242',wardrobe:0,grooming:0,
+      /* Which body the player's character actually loads as — see
+         "VRM characters" in CLAUDE.md. {type:'default'} is the original
+         GLB/primitive system (modelPerson()||makePerson(), unchanged).
+         {type:'preset',id:'avatarA'} and {type:'custom'} are VRM: custom
+         means an uploaded .vrm, whose BYTES live in IndexedDB, never here —
+         S stays small and JSON-serialisable on purpose (see "Keep S strictly
+         JSON-serialisable" below), and a 15MB blob has no business inside a
+         value that round-trips through exportSave()'s textarea. This field
+         is a NEW key nested under an EXISTING top-level one (`person`), which
+         migrate()'s shallow top-level merge does not reach into — every read
+         site guards with `S.person.character||{type:'default'}` rather than
+         relying on migration to have added it. */
+      character:{type:'default'}},
     incident:null, lastCheck:Date.now(), defended:0, breached:0, events:[]
   };
 }
