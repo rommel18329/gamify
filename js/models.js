@@ -190,14 +190,161 @@ function setAnim(g,name){
    updates leaves its model frozen in the bind pose (a T-pose). */
 function stepAnim(g,moving){
   const ud=g&&g.userData;
+  if(ud&&ud.vrmInstance) return stepVRM(ud.vrmInstance,moving);
   if(!ud||!ud.mixer) return false;
   setAnim(g, moving?'walk':'idle');
+  return true;
+}
+/* VRM has no bundled walk/idle clips -- a raw VRoid export ships a rig and
+   nothing else, unlike the Quaternius GLBs, which come with named clips
+   modelPerson() plays directly. Retargeting THIS world's walk cycle onto an
+   arbitrary VRM's humanoid skeleton is real work (mapping bone names,
+   handling proportion differences) and is a deliberately separate step, not
+   done here -- see "VRM has no walk animation yet" in CLAUDE.md. What IS
+   honest to do with only a `moving` boolean and no elapsed-time input: a
+   small forward lean, real geometry on real bones (measured against the
+   actual humanoid bone names three-vrm exposes, not guessed), so a walking
+   VRM character reads as leaning into a walk rather than sliding perfectly
+   upright across the ground. Returns true unconditionally -- never falls
+   through to tick()'s primitive-limb branch, which reaches for
+   userData.legL/legR/armL/armR that only makePerson() ever sets and would
+   throw on any VRM character. */
+function stepVRM(vrm,moving){
+  const h=vrm.humanoid; if(!h) return true;
+  const spine=h.getNormalizedBoneNode('spine');
+  if(spine) spine.rotation.x=moving?0.12:0;
   return true;
 }
 
 const ANIMATED=[];
 function updateAnimated(dt){ for(let i=0;i<ANIMATED.length;i++) ANIMATED[i].update(dt); }
 function clearAnimated(){ ANIMATED.length=0; }   // called on world teardown
+
+/* ===================== VRM CHARACTERS =====================
+   Real VRoid/VRM support, on top of the engine upgrade this needed (see
+   "The engine is ES modules now" in CLAUDE.md — modern three.js ships no
+   classic-script build, and VRM support needs modern three.js). Everything
+   here follows the SAME rule the rest of this file lives by: a missing or
+   failed asset costs you the good-looking character, never a broken game.
+   modelPerson()||makePerson() stays completely unchanged; VRM sits ABOVE
+   that pair as a third, optional, ASYNC upgrade layer — see loadPlayerBody()
+   in game.js for how the three actually compose.
+
+   Bundled presets are named files under assets/characters/vrm/. Only one
+   ships in the repo (AvatarSample_A, pixiv's own official sample — licensed
+   for alteration and distribution, not CC0; see CLAUDE.md for the exact
+   terms and why UPLOAD is the recommended path rather than more presets: a
+   VRM is ~15MB, roughly 10x every other character asset in this repo
+   combined, and that cost is only worth paying for a character that's
+   actually yours). */
+const VRM_PRESETS={
+  avatarA:{ file:'AvatarSample_A.vrm', name:'Avatar Sample A',
+            credit:'pixiv VRoid Studio official sample — alteration & distribution permitted, not CC0' }
+};
+
+/* Spring bones (hair, ribbons) and look-at both need updating every frame,
+   same reasoning as ANIMATED above for AnimationMixers — a VRM instance
+   that never gets .update() called just sits in its bind/rest pose forever
+   (though unlike a raw mixer-less mesh it won't T-pose, since VRM's rest
+   pose is a normal standing pose to begin with). Kept as its own list
+   rather than folded into ANIMATED: a THREE.AnimationMixer and a VRM
+   instance both expose .update(dt) but are not interchangeable — a VRM's
+   update() does springs/look-at/humanoid retargeting, not clip playback. */
+const VRM_ANIMATED=[];
+function updateVRM(dt){ for(let i=0;i<VRM_ANIMATED.length;i++) VRM_ANIMATED[i].update(dt); }
+function clearVRM(){ VRM_ANIMATED.length=0; }
+
+/* Loads one VRM file (a URL or a same-origin blob: URL from an uploaded
+   file) and normalises it exactly the way modelPerson() normalises a GLB:
+   ~4-units-tall to match the rest of the world, geometry flagged sharedGeo
+   so backToTitle()'s material-only disposal doesn't gut it, frustumCulled
+   off (VRM's own bounding info is tuned for its native scale, not this
+   world's — same reason modelPerson() doesn't rely on it either).
+
+   Genuinely async, unlike modelPerson() — a VRM is a per-character, possibly
+   user-uploaded file, not a small pool preloaded once at boot alongside the
+   GLBs. Callers must have something already on screen before calling this
+   (see loadPlayerBody() in game.js) and swap it in on success; there is no
+   synchronous fallback path the way modelPerson()||makePerson() has one,
+   because there is nothing to synchronously fall back TO for an arbitrary
+   uploaded file. */
+function loadVRM(url,onReady,onError){
+  if(typeof THREE.GLTFLoader!=='function'||typeof VRMLoaderPlugin==='undefined'){
+    onError&&onError(new Error('VRM loader unavailable')); return;
+  }
+  const loader=new THREE.GLTFLoader();
+  loader.register(parser=>new VRMLoaderPlugin(parser));
+  loader.load(url, gltf=>{
+    const vrm=gltf.userData.vrm;
+    if(!vrm){ onError&&onError(new Error('not a VRM file')); return; }
+    VRMUtils.removeUnnecessaryVertices(gltf.scene);
+    VRMUtils.removeUnnecessaryJoints(gltf.scene);
+    // VRM 0.x faces -Z; this world's convention (every other character, the
+    // car) is +Z. rotateVRM0() is three-vrm's own fix for exactly this — see
+    // CLAUDE.md's VRM section for how this was found (rendered the back of
+    // the head on the first attempt, measured before assuming a fix).
+    if(vrm.meta&&vrm.meta.metaVersion==='0'&&VRMUtils.rotateVRM0) VRMUtils.rotateVRM0(vrm);
+    vrm.scene.traverse(o=>{ o.frustumCulled=false; o.userData.sharedGeo=true; });
+    const box=new THREE.Box3().setFromObject(vrm.scene);
+    const h=Math.max(box.max.y-box.min.y,.001);
+    vrm.scene.scale.multiplyScalar(4.0/h);
+    vrm.scene.userData.vrmInstance=vrm;
+    VRM_ANIMATED.push(vrm);
+    onReady(vrm);
+  }, undefined, e=>onError&&onError(e));
+}
+/* Removes one VRM instance from the update registry (world teardown, or
+   swapping a character out for a different one) — the inverse of the push
+   in loadVRM(). Leaving a stale entry in VRM_ANIMATED would keep ticking
+   springs/look-at on a character no longer in the scene. */
+function unregisterVRM(vrm){
+  const i=VRM_ANIMATED.indexOf(vrm);
+  if(i>=0) VRM_ANIMATED.splice(i,1);
+}
+
+/* ---- storing an uploaded .vrm ----
+   A VRM is ~15MB — nowhere near localStorage's realistic quota (5-10MB
+   shared with the actual save), and it must never go anywhere near S itself
+   (see the comment on S.person.character in data.js: S stays small and
+   JSON-serialisable so exportSave()'s textarea and backup flow keep working).
+   IndexedDB is the only browser storage built for a blob this size, so the
+   uploaded file's bytes live there, entirely separate from S — S only ever
+   holds the small marker {type:'custom'} saying ONE exists. */
+const VRM_DB_NAME='sprout_vrm', VRM_DB_STORE='files', VRM_DB_KEY='player_custom';
+function vrmDBOpen(onReady,onError){
+  if(!('indexedDB' in window)){ onError&&onError(new Error('IndexedDB unavailable')); return; }
+  const req=indexedDB.open(VRM_DB_NAME,1);
+  req.onupgradeneeded=()=>{ req.result.createObjectStore(VRM_DB_STORE); };
+  req.onsuccess=()=>onReady(req.result);
+  req.onerror=()=>onError&&onError(req.error);
+}
+function saveCustomVRM(arrayBuffer,onDone,onError){
+  vrmDBOpen(db=>{
+    const tx=db.transaction(VRM_DB_STORE,'readwrite');
+    tx.objectStore(VRM_DB_STORE).put(arrayBuffer,VRM_DB_KEY);
+    tx.oncomplete=()=>onDone&&onDone();
+    tx.onerror=()=>onError&&onError(tx.error);
+  },onError);
+}
+/* Reads the stored bytes back out, makes a throwaway blob: URL for the
+   GLTFLoader to fetch (it only takes a URL, not raw bytes), and revokes that
+   URL the moment loading settles either way — nothing about a blob: URL
+   needs to outlive this one load. */
+function loadCustomVRM(onReady,onError){
+  vrmDBOpen(db=>{
+    const tx=db.transaction(VRM_DB_STORE,'readonly');
+    const req=tx.objectStore(VRM_DB_STORE).get(VRM_DB_KEY);
+    req.onsuccess=()=>{
+      const buf=req.result;
+      if(!buf){ onError&&onError(new Error('no custom VRM stored')); return; }
+      const url=URL.createObjectURL(new Blob([buf]));
+      loadVRM(url,
+        vrm=>{ URL.revokeObjectURL(url); onReady(vrm); },
+        e=>{ URL.revokeObjectURL(url); onError&&onError(e); });
+    };
+    req.onerror=()=>onError&&onError(req.error);
+  },onError);
+}
 
 /* ---- vehicle ---- */
 /* The CC0 car ships colour-only named materials, so the existing paint system
