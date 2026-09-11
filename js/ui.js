@@ -54,8 +54,22 @@ function bindTap(el,fn){
 
 /* The 3D engine loads behind this screen, so ENTER can be tapped a beat before
    game.js has parsed. Say so rather than being a dead button. */
+/* ENTER, with the one failure mode that can never resolve called out by name.
+   The engine loads as ES modules (see CLAUDE.md, "The engine is ES modules
+   now"), and Chrome refuses to fetch a module script from file:// outright —
+   CORS, origin 'null'. Opened by double-clicking index.html the engine
+   therefore never arrives, enterWorld never gets defined, and the old code
+   here answered every tap with "STILL LOADING — ONE SECOND" forever. That is
+   a lie: it is not still loading, it is never going to load, and the player
+   has no way to tell those two apart. The core path (habits, LOG, STATS,
+   BADGES, BACKUP) works perfectly over file:// and is untouched — only the
+   3D world needs the server, so say exactly that instead. */
 function enterWorldSafe(){
   if(typeof enterWorld==='function') return enterWorld();
+  if(location.protocol==='file:'){
+    toast('THE 3D WORLD NEEDS A SERVER — run: python3 -m http.server, then open localhost:8000. Habits work fine here.');
+    return;
+  }
   toast('STILL LOADING — ONE SECOND');
 }
 function chime(done,total){ if(typeof habitChime==='function') habitChime(done,total); }
