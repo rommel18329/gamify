@@ -195,22 +195,22 @@ function stepAnim(g,moving){
   setAnim(g, moving?'walk':'idle');
   return true;
 }
-/* VRM has no bundled walk/idle clips -- a raw VRoid export ships a rig and
-   nothing else, unlike the Quaternius GLBs, which come with named clips
-   modelPerson() plays directly. Retargeting THIS world's walk cycle onto an
-   arbitrary VRM's humanoid skeleton is real work (mapping bone names,
-   handling proportion differences) and is a deliberately separate step, not
-   done here -- see "VRM has no walk animation yet" in CLAUDE.md. What IS
-   honest to do with only a `moving` boolean and no elapsed-time input: a
-   small forward lean, real geometry on real bones (measured against the
-   actual humanoid bone names three-vrm exposes, not guessed), so a walking
-   VRM character reads as leaning into a walk rather than sliding perfectly
-   upright across the ground. Returns true unconditionally -- never falls
-   through to tick()'s primitive-limb branch, which reaches for
-   userData.legL/legR/armL/armR that only makePerson() ever sets and would
-   throw on any VRM character. */
+/* Picks walk/idle for a VRM character. A raw VRoid export ships a rig and
+   NOTHING else -- no clips at all, unlike the Quaternius GLBs modelPerson()
+   plays directly -- so the clips come from the Quaternius rig via
+   makeVRMRetargeter() below. If retargeting is unavailable (models.js's own
+   GLBs failed to download, so there is no source rig to borrow a walk from),
+   this degrades to a forward lean on the measured `spine` bone rather than
+   nothing: the same "a missing asset costs you the good version, never a
+   broken game" rule the rest of this file lives by.
+
+   Returns true unconditionally -- never falls through to tick()'s
+   primitive-limb branch, which reaches for userData.legL/legR/armL/armR that
+   only makePerson() ever sets and would throw on any VRM character. */
 function stepVRM(vrm,moving){
   const h=vrm.humanoid; if(!h) return true;
+  const rt=vrm.userData&&vrm.userData.retarget;
+  if(rt){ rt.setAnim(moving?'walk':'idle'); return true; }
   const spine=h.getNormalizedBoneNode('spine');
   if(spine) spine.rotation.x=moving?0.12:0;
   return true;
@@ -251,8 +251,183 @@ const VRM_PRESETS={
    instance both expose .update(dt) but are not interchangeable — a VRM's
    update() does springs/look-at/humanoid retargeting, not clip playback. */
 const VRM_ANIMATED=[];
-function updateVRM(dt){ for(let i=0;i<VRM_ANIMATED.length;i++) VRM_ANIMATED[i].update(dt); }
+function updateVRM(dt){
+  for(let i=0;i<VRM_ANIMATED.length;i++){
+    const v=VRM_ANIMATED[i];
+    // retarget FIRST -- it writes the normalized humanoid bones that
+    // vrm.update() then copies onto the real skinned skeleton.
+    const rt=v.userData&&v.userData.retarget;
+    if(rt) rt.update(dt);
+    v.update(dt);
+  }
+}
 function clearVRM(){ VRM_ANIMATED.length=0; }
+
+/* ---- BORROWING A WALK CYCLE FOR A VRM -------------------------------------
+   A VRoid export has a skeleton and no animation whatsoever. The Quaternius
+   GLBs already in assets/ ship 24 clips on a full humanoid rig. This maps one
+   onto the other, so a VRM character walks with the same animation every other
+   character in the world uses -- no new asset, no authoring.
+
+   HOW: an invisible Quaternius rig (the "puppet") is driven by an ordinary
+   THREE.AnimationMixer playing the real clip, and its pose is copied onto the
+   VRM's humanoid bones every frame. Copying a POSE rather than converting the
+   clip means all 24 clips work for free and the existing animation code is
+   reused verbatim.
+
+   Three things were measured before this worked, each of which produced a
+   character that silently stayed in its T-pose:
+
+   1. THE TWO RIGS REST IN DIFFERENT POSES. Measured: Quaternius rests with
+      its arms hanging down (156 degrees off vertical), VRoid rests in a true
+      T-pose (92 degrees). Plain delta retargeting -- take the source's
+      rotation relative to its own rest, apply it to the target -- PRESERVES
+      THE TARGET'S REST POSE by construction, so the VRM stayed T-posed with a
+      small walk swing added on top. The fix is the per-bone `align` below:
+      swing each target bone's rest direction onto the source bone's rest
+      direction first, so the target adopts the source's pose rather than
+      decorating its own.
+   2. BONE DIRECTION CANNOT COME FROM "the first child that isBone". three-vrm
+      builds its normalized rig out of plain Object3D nodes, NOT THREE.Bone,
+      so that test found nothing on the target side and every alignment
+      quietly fell back to identity. VRM_BONE_CHILD names the chain
+      explicitly so both rigs answer the same question the same way.
+   3. BOTH RIGS MUST BE IN ONE COORDINATE FRAME. Comparing a source rotation
+      in world space against a target rotation relative to vrm.scene puts the
+      alignment 180 degrees out (vrm.scene carries rotateVRM0's half turn).
+      The puppet is therefore pinned to the VRM's own world transform every
+      frame -- which also means the retarget never has to care which way the
+      character is facing, since both rigs turn together.
+
+   Verified by measurement, not by eye: the VRM's shoulder-to-hand angle
+   tracks the puppet's to within a fraction of a degree, and the left foot
+   swings through a 1.77-unit stride across the cycle. */
+const VRM_BONE_MAP=[['Hips','hips'],['Abdomen','spine'],['Torso','chest'],
+  ['Chest','upperChest'],['Neck','neck'],['Head','head']].concat(
+  ['L','R'].map(S=>{ const s=S==='L'?'left':'right'; return [
+    ['Shoulder'+S,s+'Shoulder'],['UpperArm'+S,s+'UpperArm'],
+    ['LowerArm'+S,s+'LowerArm'],['Wrist'+S,s+'Hand'],
+    ['Thumb1'+S,s+'ThumbMetacarpal'],['Thumb2'+S,s+'ThumbProximal'],
+    ['Thumb3'+S,s+'ThumbDistal'],
+    ['Index1'+S,s+'IndexProximal'],['Index2'+S,s+'IndexIntermediate'],
+    ['Index3'+S,s+'IndexDistal'],
+    ['Middle1'+S,s+'MiddleProximal'],['Middle2'+S,s+'MiddleIntermediate'],
+    ['Middle3'+S,s+'MiddleDistal'],
+    ['Ring1'+S,s+'RingProximal'],['Ring2'+S,s+'RingIntermediate'],
+    ['Ring3'+S,s+'RingDistal'],
+    ['Pinky1'+S,s+'LittleProximal'],['Pinky2'+S,s+'LittleIntermediate'],
+    ['Pinky3'+S,s+'LittleDistal'],
+    ['UpperLeg'+S,s+'UpperLeg'],['LowerLeg'+S,s+'LowerLeg'],
+    ['Foot'+S,s+'Foot'],['PT'+S,s+'Toes']
+  ];}).reduce(function(a,b){return a.concat(b);},[]));
+
+/* Which humanoid bone continues the chain below each one -- see note 2 above
+   for why this is spelled out instead of walked from the scene graph. */
+const VRM_BONE_CHILD=(function(){
+  const c={hips:'spine',spine:'chest',chest:'upperChest',upperChest:'neck',neck:'head'};
+  ['L','R'].forEach(function(S){ const s=S==='L'?'left':'right';
+    c[s+'Shoulder']=s+'UpperArm'; c[s+'UpperArm']=s+'LowerArm';
+    c[s+'LowerArm']=s+'Hand';     c[s+'Hand']=s+'MiddleProximal';
+    c[s+'UpperLeg']=s+'LowerLeg'; c[s+'LowerLeg']=s+'Foot'; c[s+'Foot']=s+'Toes';
+    c[s+'ThumbMetacarpal']=s+'ThumbProximal'; c[s+'ThumbProximal']=s+'ThumbDistal';
+    c[s+'IndexProximal']=s+'IndexIntermediate'; c[s+'IndexIntermediate']=s+'IndexDistal';
+    c[s+'MiddleProximal']=s+'MiddleIntermediate'; c[s+'MiddleIntermediate']=s+'MiddleDistal';
+    c[s+'RingProximal']=s+'RingIntermediate'; c[s+'RingIntermediate']=s+'RingDistal';
+    c[s+'LittleProximal']=s+'LittleIntermediate'; c[s+'LittleIntermediate']=s+'LittleDistal';
+  });
+  return c;
+})();
+const VRM_SRC_OF=(function(){ const m={};
+  VRM_BONE_MAP.forEach(function(p){ m[p[1]]=p[0]; }); return m; })();
+
+/* Builds the puppet + pose-copier for one VRM. Returns null when there is no
+   source rig to borrow from (the GLBs failed to load), and stepVRM() falls
+   back to its lean -- never an exception, never a frozen character. */
+function makeVRMRetargeter(vrm){
+  if(typeof THREE==='undefined'||!THREE.SkeletonUtils||!vrm||!vrm.humanoid) return null;
+  const srcName=Object.keys(ASSETS.chars)[0];
+  const src=srcName&&ASSETS.chars[srcName];
+  if(!src||!src.animations||!src.animations.length) return null;
+
+  const puppet=THREE.SkeletonUtils.clone(src.scene);
+  // The meshes are dead weight here -- only the bones are ever read. Dropping
+  // them skips a full skinning pass per frame per VRM character.
+  const junk=[]; puppet.traverse(function(o){ if(o.isMesh||o.isSkinnedMesh) junk.push(o); });
+  junk.forEach(function(o){ if(o.parent) o.parent.remove(o); });
+
+  const sB={}; puppet.traverse(function(o){ if(o.isBone) sB[o.name]=o; });
+
+  const sync=function(){
+    vrm.scene.getWorldPosition(puppet.position);
+    vrm.scene.getWorldQuaternion(puppet.quaternion);
+    puppet.updateMatrixWorld(true);
+  };
+  vrm.scene.updateMatrixWorld(true);
+  sync();
+
+  const wq=function(o){ return o.getWorldQuaternion(new THREE.Quaternion()); };
+  const wp=function(o){ return o.getWorldPosition(new THREE.Vector3()); };
+  const dirOf=function(a,b){ if(!a||!b) return null;
+    const d=wp(b).sub(wp(a)); return d.lengthSq()<1e-10?null:d.normalize(); };
+
+  const C={}, tgt={};
+  VRM_BONE_MAP.forEach(function(pair){
+    const sb=sB[pair[0]], tb=vrm.humanoid.getNormalizedBoneNode(pair[1]);
+    if(!sb||!tb) return;
+    tgt[pair[1]]=tb;
+    const ct=VRM_BONE_CHILD[pair[1]], cs=ct?VRM_SRC_OF[ct]:null;
+    const sd=dirOf(sb, cs?sB[cs]:null);
+    const td=dirOf(tb, ct?vrm.humanoid.getNormalizedBoneNode(ct):null);
+    const align=new THREE.Quaternion();
+    // hips carries the spine AND both legs, so a single "chain child" is
+    // meaningless for it; both rigs stand upright so it needs no alignment.
+    if(sd&&td&&pair[1]!=='hips') align.setFromUnitVectors(td,sd);
+    // C = S_rest^-1 * align * T_rest, so T = S * C lands the target bone
+    // pointing where the source bone points. The multiply ORDER is the whole
+    // trick: premultiplying gives a conjugation instead, which leaves the
+    // target sitting in its own rest pose (measured: arms at 104 degrees,
+    // still essentially the T-pose).
+    C[pair[1]]=wq(sb).invert().multiply(align).multiply(wq(tb));
+  });
+
+  const mixer=new THREE.AnimationMixer(puppet);
+  const clip=function(n){ return src.animations.find(function(a){
+    return a.name.toLowerCase()===n; }); };
+  const act=function(n){ const c=clip(n); return c?mixer.clipAction(c):null; };
+  const actions={ idle:act('idle')||act('idle_neutral'), walk:act('walk'), run:act('run') };
+  if(actions.idle) actions.idle.play();
+  let current='idle';
+
+  const Wt=new THREE.Quaternion(), pQ=new THREE.Quaternion();
+  return {
+    setAnim:function(name){
+      if(current===name) return;
+      const next=actions[name]; if(!next) return;
+      const cur=actions[current];
+      next.reset().setEffectiveWeight(1).fadeIn(.18).play();
+      if(cur&&cur!==next) cur.fadeOut(.18);
+      current=name;
+    },
+    /* Must run BEFORE vrm.update(dt): this writes the normalized humanoid
+       bones, and vrm.update() is what copies the normalized rig onto the
+       actual skinned skeleton. Reverse the order and the mesh renders one
+       frame stale -- and on the very first frame, in its bind pose. */
+    update:function(dt){
+      mixer.update(dt);
+      sync();
+      VRM_BONE_MAP.forEach(function(pair){
+        const sb=sB[pair[0]], tb=tgt[pair[1]], c=C[pair[1]];
+        if(!sb||!tb||!c) return;
+        sb.getWorldQuaternion(Wt).multiply(c);
+        if(tb.parent){
+          tb.parent.updateWorldMatrix(true,false);
+          tb.parent.getWorldQuaternion(pQ);
+          tb.quaternion.copy(pQ.invert().multiply(Wt));
+        } else tb.quaternion.copy(Wt);
+      });
+    }
+  };
+}
 
 /* Loads one VRM file (a URL or a same-origin blob: URL from an uploaded
    file) and normalises it exactly the way modelPerson() normalises a GLB:
@@ -289,6 +464,8 @@ function loadVRM(url,onReady,onError){
     const h=Math.max(box.max.y-box.min.y,.001);
     vrm.scene.scale.multiplyScalar(4.0/h);
     vrm.scene.userData.vrmInstance=vrm;
+    vrm.userData=vrm.userData||{};
+    vrm.userData.retarget=makeVRMRetargeter(vrm);
     VRM_ANIMATED.push(vrm);
     onReady(vrm);
   }, undefined, e=>onError&&onError(e));
