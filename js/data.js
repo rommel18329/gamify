@@ -131,6 +131,9 @@ function blank(){
          never a mesh or a THREE object, because S round-trips through
          exportSave()'s textarea (see "Keep S strictly JSON-serialisable"). */
       fit:{hide:{},tint:{}},
+      /* Body proportions, 1.0 = the model exactly as exported. Plain numbers
+         only, same reason as `fit` — S round-trips through exportSave(). */
+      body:{},
       /* Which body the player's character actually loads as — see
          "VRM characters" in CLAUDE.md. {type:'default'} is the original
          GLB/primitive system (modelPerson()||makePerson(), unchanged).

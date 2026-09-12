@@ -464,6 +464,144 @@ function openBadges(){
    models.js is what defines loadVRM()/saveCustomVRM()/etc. — this sheet is
    pure DOM glue, the same division CLAUDE.md documents everywhere else in
    this file. */
+/* ---- LIVE CHARACTER PREVIEW ------------------------------------------------
+   A small, self-contained 3D view inside the CHARACTER sheet so the body
+   sliders can be judged while they are dragged. This is the ONE place outside
+   ENTER THE WORLD that creates a WebGL context, and it only does so when the
+   player actually opens the sheet -- the title screen itself still renders
+   with zero contexts, which is the whole point of the core path.
+
+   Everything it needs (THREE, loadVRM, applyVRMBody) lives in the engine
+   layer, so every entry point here guards on it being loaded and degrades to
+   "no preview, sliders still work" rather than throwing. */
+let charPrev=null;
+
+function disposeCharPreview(){
+  if(!charPrev) return;
+  try{
+    if(charPrev.raf) cancelAnimationFrame(charPrev.raf);
+    if(charPrev.vrm&&typeof unregisterVRM==='function') unregisterVRM(charPrev.vrm);
+    if(charPrev.renderer){ charPrev.renderer.dispose();
+      /* forceContextLoss() is what actually hands the GPU context back; a bare
+         dispose() leaves it allocated until GC gets round to it, and the limit
+         is on LIVE contexts. */
+      if(charPrev.renderer.forceContextLoss) charPrev.renderer.forceContextLoss(); }
+  }catch(e){}
+  charPrev=null;
+}
+
+function charPreviewReady(){
+  return typeof THREE!=='undefined' && typeof loadVRM==='function'
+      && typeof applyVRMBody==='function';
+}
+
+function startCharPreview(){
+  const host=document.getElementById('charPrev');
+  if(!host||!charPreviewReady()) return;
+  disposeCharPreview();
+  const w=host.clientWidth||300, h=260;
+  const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+  renderer.setSize(w,h);
+  if(THREE.SRGBColorSpace) renderer.outputColorSpace=THREE.SRGBColorSpace;
+  host.innerHTML=''; host.appendChild(renderer.domElement);
+
+  const scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x2A313B);
+  // the game's own lighting numbers, so the preview is not a different look
+  scene.add(new THREE.AmbientLight(0xffffff,.42));
+  const sun=new THREE.DirectionalLight(0xffffff,.46); sun.position.set(-4,8,6); scene.add(sun);
+  const fill=new THREE.DirectionalLight(0xCFE0FF,.19); fill.position.set(4,4,-6); scene.add(fill);
+
+  const cam=new THREE.PerspectiveCamera(32,w/h,.1,60);
+  const rig=new THREE.Group(); scene.add(rig);
+  charPrev={renderer,scene,cam,rig,vrm:null,raf:0,spin:0,host};
+
+  const ch=(S.person&&S.person.character)||{type:'default'};
+  const onReady=(vrm)=>{
+    if(!charPrev) return;                 // sheet closed while it loaded
+    charPrev.vrm=vrm; rig.add(vrm.scene);
+    refreshCharPreview();
+    /* The idle pose is BORROWED from the Quaternius rig (see "Borrowing a walk
+       cycle"), and those GLBs are only fetched by loadAssets() on the way into
+       the world -- on the title screen they have never been downloaded, so
+       makeVRMRetargeter() found no source rig and returned null, and the
+       preview rendered a dead T-pose. Pull them in now; the sheet is already
+       loading a far larger .vrm, so this costs nothing extra in practice. */
+    const pose=()=>{
+      if(!charPrev||charPrev.vrm!==vrm) return;
+      if(!vrm.userData.retarget&&typeof makeVRMRetargeter==='function')
+        vrm.userData.retarget=makeVRMRetargeter(vrm);
+      const rt=vrm.userData.retarget;
+      if(rt) rt.setAnim('idle');
+      /* Settle the spring bones before this is judged: hair starts at its rest
+         offsets and springs into place over several frames, so without this
+         the first impression is a head of hair standing on end. */
+      for(let i=0;i<30;i++){ if(rt) rt.update(1/60); vrm.update(1/60); }
+    };
+    if(typeof loadAssets==='function') loadAssets(pose); else pose();
+  };
+  if(ch.type==='preset'&&typeof VRM_PRESETS!=='undefined'&&VRM_PRESETS[ch.id]){
+    loadVRM(ASSET_BASE+'characters/vrm/'+VRM_PRESETS[ch.id].file,onReady,()=>{});
+  } else if(ch.type==='custom'&&typeof loadCustomVRM==='function'){
+    loadCustomVRM(onReady,()=>{});
+  } else {
+    host.innerHTML='<div class="tkdone">Pick a VRM character below to see it here.</div>';
+    disposeCharPreview(); return;
+  }
+
+  const tick=()=>{
+    if(!charPrev) return;
+    charPrev.raf=requestAnimationFrame(tick);
+    charPrev.spin+=.006;
+    rig.rotation.y=charPrev.spin;
+    if(charPrev.vrm){
+      /* Drive the retargeter, THEN vrm.update(). Calling update() alone leaves
+         the character in its bind pose -- a dead T-pose with the arms straight
+         out, which is exactly how the preview first rendered. The retargeter
+         is what puts it in the idle stance, and vrm.update() is what copies
+         that onto the skinned mesh. */
+      const rt=charPrev.vrm.userData&&charPrev.vrm.userData.retarget;
+      if(rt){ rt.setAnim('idle'); rt.update(1/60); }
+      charPrev.vrm.update(1/60);
+      const box=new THREE.Box3().setFromObject(charPrev.vrm.scene);
+      const hh=Math.max(box.max.y-box.min.y,.001);
+      // pulled back enough that a wide Shoulders setting still fits the frame
+      cam.position.set(0,hh*.52,hh*1.85);
+      cam.lookAt(0,hh*.49,0);
+    }
+    renderer.render(scene,cam);
+  };
+  tick();
+}
+
+/* Re-applies body + fit to the preview model in place. Cheap enough to call
+   on every slider input because it only writes bone scales and material
+   colours -- nothing is reloaded. */
+function refreshCharPreview(){
+  if(!charPrev||!charPrev.vrm) return;
+  const ch=(S.person&&S.person.character)||{};
+  charPrev.vrm.scene.scale.setScalar(1);
+  const box=new THREE.Box3().setFromObject(charPrev.vrm.scene);
+  const hh=Math.max(box.max.y-box.min.y,.001);
+  charPrev.vrm.scene.scale.setScalar(4.0/hh);      // same normalisation loadVRM does
+  applyVRMBody(charPrev.vrm, ch.body);
+  if(typeof applyVRMFit==='function') applyVRMFit(charPrev.vrm, ch.fit);
+}
+
+/* The dials. Ranges are deliberately narrow: these scale a real skeleton, and
+   past roughly +/-25% the mesh starts to show the stretch rather than reading
+   as a different build. `head` is tighter still (+/-8%) because the hair is a
+   separate mesh on spring bones and a big head scale makes it spike. */
+const BODY_DIALS=[
+  {k:'height',   nm:'Height',        min:.86,max:1.16,step:.01},
+  {k:'build',    nm:'Build',         min:.82,max:1.30,step:.01},
+  {k:'shoulders',nm:'Shoulders',     min:.85,max:1.28,step:.01},
+  {k:'legs',     nm:'Leg length',    min:.86,max:1.22,step:.01},
+  {k:'arms',     nm:'Arm length',    min:.88,max:1.18,step:.01},
+  {k:'head',     nm:'Head size',     min:.92,max:1.08,step:.01}
+];
+
 function openCharacter(){
   /* Reachable from the title screen, which is deliberately usable before the
      3D engine (and models.js, where VRM_PRESETS/loadVRM live) has finished
@@ -474,7 +612,8 @@ function openCharacter(){
   const presetsReady=typeof VRM_PRESETS!=='undefined';
   const ch=(S.person&&S.person.character)||{type:'default'};
   const is=(type,id)=>ch.type===type&&(type!=='preset'||ch.id===id);
-  let html='<div class="note">A real VRoid character, not a recolour — make your own free '+
+  let html='<div id="charPrev" class="charprev"></div>';
+  html+='<div class="note">A real VRoid character, not a recolour — make your own free '+
     'at <b>vroid.com</b> (VRoid Studio) and upload the .vrm it exports, or start with the '+
     'bundled sample. Takes effect the next time you ENTER THE WORLD.</div>';
   html+='<div class="tkh">CHARACTER</div>';
@@ -498,6 +637,29 @@ function openCharacter(){
     (customSel?'Currently selected — tap to replace it':'Pick a .vrm file exported from VRoid Studio')+
     '</span></div></div>';
   html+='<input type="file" id="vrmFileInput" accept=".vrm" style="display:none">';
+
+  /* BODY. Only meaningful on a VRM, because it reshapes a real skeleton —
+     the default primitive character has no humanoid rig to scale. */
+  if(ch.type==='preset'||ch.type==='custom'){
+    const bd=Object.assign({height:1,build:1,shoulders:1,legs:1,arms:1,head:1},
+                           (S.person.character&&S.person.character.body)||{});
+    html+='<div class="tkh">BODY</div>';
+    if(typeof applyVRMBody!=='function'){
+      html+='<div class="tkdone">Still loading — reopen this in a second.</div>';
+    } else {
+      html+='<div class="note">Drag to reshape. Takes effect on the preview '+
+        'immediately and in the world the next time you ENTER.</div>';
+      BODY_DIALS.forEach(d=>{
+        const v=bd[d.k];
+        html+='<div class="dial"><label>'+d.nm+
+          '<span id="dv_'+d.k+'">'+Math.round(v*100)+'%</span></label>'+
+          '<input type="range" data-dial="'+d.k+'" min="'+d.min+'" max="'+d.max+
+          '" step="'+d.step+'" value="'+v+'"></div>';
+      });
+      html+='<div class="row" id="bodyReset"><div class="ck"></div>'+
+        '<div class="nm">Reset body<span class="cue">Back to the model as exported</span></div></div>';
+    }
+  }
 
   /* THE FIT. Only shown for a VRM body — the default GLB/primitive character
      has its own colour system (FITS/dripFit in models.js) and none of these
@@ -537,6 +699,31 @@ function openCharacter(){
     }
   }
   document.getElementById('sheetBody').innerHTML=html;
+
+  /* Sliders write S on every input and repaint the preview in place. `input`
+     rather than `change` so the model moves under the finger, and save() is
+     deliberately NOT called on every pixel of drag — only when the finger
+     lifts — since save() serialises the whole of S to localStorage. */
+  document.querySelectorAll('#sheetBody [data-dial]').forEach(el=>{
+    const k=el.getAttribute('data-dial');
+    const apply=()=>{
+      const c=S.person.character;
+      c.body=c.body||{};
+      c.body[k]=parseFloat(el.value);
+      const lbl=document.getElementById('dv_'+k);
+      if(lbl) lbl.textContent=Math.round(parseFloat(el.value)*100)+'%';
+      refreshCharPreview();
+    };
+    el.addEventListener('input',apply);
+    ['change','pointerup','touchend'].forEach(ev=>el.addEventListener(ev,()=>{apply();save();}));
+  });
+  const rst=document.getElementById('bodyReset');
+  if(rst) bindTap(rst,()=>{
+    S.person.character.body={}; save(); openCharacter();
+    toast('Body reset');
+  });
+  startCharPreview();
+
   document.querySelectorAll('#sheetBody [data-fit]').forEach(el=>{
     bindTap(el,()=>{
       const parts=el.getAttribute('data-fit').split(':');
@@ -551,7 +738,7 @@ function openCharacter(){
       const c=S.person.character;
       c.fit=c.fit||{hide:{},tint:{}}; c.fit.tint=c.fit.tint||{};
       if(f.tint==null) delete c.fit.tint[slot]; else c.fit.tint[slot]=f.tint;
-      save(); openCharacter();
+      save(); openCharacter();   // rebuilds the sheet, which restarts the preview
     });
   });
   document.querySelectorAll('#sheetBody [data-char]').forEach(el=>{
@@ -667,7 +854,15 @@ function openSheet(title){
   document.getElementById('sheetTitle').textContent=title;
   document.getElementById('sheet').classList.add('show');
 }
-function closeSheet(){ document.getElementById('sheet').classList.remove('show'); }
+function closeSheet(){
+  document.getElementById('sheet').classList.remove('show');
+  /* The CHARACTER sheet spins up its own WebGL context for the live preview.
+     A browser only allows a handful of them alive at once and silently drops
+     the OLDEST when you exceed it -- which would eventually take out the
+     GAME's context, not the preview's. So the preview is always torn down
+     when the sheet closes, never left parked. */
+  if(typeof disposeCharPreview==='function') disposeCharPreview();
+}
 
 /* ---- quick log ---- */
 function openStats(){
