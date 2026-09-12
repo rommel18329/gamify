@@ -759,6 +759,65 @@ bakes the cut into the mesh, so an oversized tee and a fitted one are two
 different exports — there is no slider. Different silhouettes come from more
 `.vrm` files, not from code, and `DRIP_FITS` cannot produce them.
 
+#### The in-app character builder
+
+The CHARACTER sheet is a real builder: a live 3D preview with body-proportion
+sliders, then the colourway rows. It exists because **VRoid Studio does not
+run on iPhone** (Windows, macOS and iPad only — VRoid *Mobile* is a different
+app that dresses up existing characters and cannot export VRM), so a
+phone-only owner otherwise has no way to shape a character at all.
+
+**Shape comes from scaling the SKELETON, because a VRoid export ships no shape
+morphs.** All 56 of its morph targets are `Fcl_*` *expressions* (blink, joy,
+the vowels) — verified by reading the file, not assumed. Bones are the only
+handle on proportion there is. `applyVRMBody(vrm, body)` in `js/models.js`
+drives six dials, each `1.0` = the model exactly as exported.
+
+Two things were measured, and each one silently produced *no visible change
+at all*:
+
+- **Scale must go on the RAW bones.** three-vrm's normalized humanoid rig is a
+  parallel skeleton that only carries **rotations** across to the real one, so
+  any scale written there is dropped without complaint — three differently
+  "scaled" bodies came back at exactly 1.613 units with identical vertex
+  positions. `getRawBoneNode()`, never `getNormalizedBoneNode()`.
+- **`Box3.setFromObject` cannot verify it.** It transforms the geometry's
+  *bind-pose* bounds by the world matrix, so a reshaped skinned mesh reports an
+  identical box every time. Sample a real vertex through `applyBoneTransform`
+  — the same trap the garment transplant hit.
+
+Scaling a bone scales everything below it, so **each dial counter-scales its
+own children**: widening the chest would otherwise stretch the arms sideways
+with it, and thickening the torso would inflate the head. `height` is the one
+dial that does not touch the skeleton at all — it scales the whole scene,
+which cannot distort anything and cannot fight the retargeter.
+
+Ranges are deliberately narrow (roughly ±25%, and only ±8% on `head`): these
+stretch a real mesh, and past that it reads as distortion rather than as a
+different build. `head` is tighter because the hair is a separate mesh on
+spring bones and a large head scale makes it spike.
+
+**Order matters in `loadPlayerBody()`:** body → rebuild retargeter → fit.
+`makeVRMRetargeter()` measures its rest directions from the skeleton, so a
+retargeter built before the bones were scaled is aligned to the wrong body.
+
+**The preview is the only WebGL context outside the world**, and it is created
+only when the sheet is actually opened — the title screen still renders with
+zero contexts, which is the whole point of the core path (measured: still
+104 ms to interactive with this in). `closeSheet()` always calls
+`disposeCharPreview()`, which calls `forceContextLoss()` as well as
+`dispose()`: a browser allows only a handful of live contexts and silently
+drops the **oldest** past the limit, which would take out the *game's* context
+rather than the preview's.
+
+Two things the preview needs that are easy to miss, both of which rendered a
+dead T-pose until they were added: the idle stance is **borrowed from the
+Quaternius rig**, whose GLBs are normally only fetched on the way into the
+world — so the preview calls `loadAssets()` itself, or `makeVRMRetargeter()`
+finds no source rig and returns `null`. And the retargeter must be **driven**
+each frame (`rt.update()`) before `vrm.update()`; calling `vrm.update()` alone
+leaves the character in its bind pose.
+
 #### EL DRIP: the fit catalogue
 
 `DRIP_FITS` in `js/data.js` — colourways per slot in **three tiers**, because

@@ -413,3 +413,16 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
    content; a thing you can't see is nothing. Same rule as MAESTRÍA's gates. */
 .sheet .row.lk{opacity:.55}
 .sheet .row.lk .nm{font-style:normal}
+
+/* CHARACTER sheet: live preview + body dials */
+.charprev{width:100%;height:260px;border-radius:12px;overflow:hidden;
+  background:#2A313B;margin-bottom:10px;display:flex;align-items:center;
+  justify-content:center}
+.charprev canvas{display:block;width:100%;height:100%}
+.dial{padding:7px 2px 9px}
+.dial label{display:flex;justify-content:space-between;font-size:12.5px;
+  letter-spacing:.04em;opacity:.85;margin-bottom:5px}
+.dial label span{font-variant-numeric:tabular-nums;opacity:.7}
+/* Full-width and tall enough to drag with a thumb — these are the primary
+   control on this screen, not a secondary tweak. */
+.dial input[type=range]{width:100%;height:26px;accent-color:#8FBF6A}

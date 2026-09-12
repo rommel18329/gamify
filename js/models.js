@@ -596,6 +596,69 @@ function vrmWear(hostVrm,donorVrm,slot){
   return worn;
 }
 
+/* ---- BODY SHAPE ----------------------------------------------------------
+   Reshapes a VRM by scaling its skeleton. This is what makes an in-app
+   character builder possible at all, because a VRoid export ships NO
+   face-or-body shape morphs -- all 56 of its morph targets are `Fcl_*`
+   EXPRESSIONS (blink, joy, the vowels), verified by reading the file. Bones
+   are the only handle on proportion there is.
+
+   TWO things were measured before this worked:
+
+   1. SCALE MUST GO ON THE **RAW** BONES. three-vrm's normalized humanoid rig
+      is a parallel skeleton that only carries ROTATIONS across to the real
+      one, so any scale written there is silently dropped -- three differently
+      "scaled" bodies all came back exactly 1.613 units tall, with the same
+      vertex positions. getRawBoneNode(), not getNormalizedBoneNode().
+   2. `Box3.setFromObject` CANNOT verify any of this. It transforms the
+      geometry's BIND-POSE bounds by the world matrix, so a reshaped skinned
+      mesh reports an identical box every time. Sample a real vertex through
+      `applyBoneTransform` instead (the same trap the garment transplant hit).
+
+   Scaling a bone scales everything BELOW it, so each dial counter-scales its
+   own children: widening the chest would otherwise stretch the arms sideways
+   with it, and thickening the torso would inflate the head. Every dial is
+   1.0 = unchanged. */
+const VRM_BODY_DEFAULT={height:1,build:1,shoulders:1,legs:1,arms:1,head:1};
+
+function applyVRMBody(vrm,body){
+  if(!vrm||!vrm.humanoid) return;
+  const b=Object.assign({},VRM_BODY_DEFAULT,body||{});
+  const R=n=>vrm.humanoid.getRawBoneNode(n);
+  const set=(n,x,y,z)=>{ const o=R(n); if(o) o.scale.set(x,y,z); };
+
+  // torso girth: spine and chest thicken across and front-to-back, never up
+  set('spine', b.build,1,b.build);
+  set('chest', b.shoulders,1,1);
+
+  /* Counter-scale the things hanging off the torso so they keep their own
+     proportions: without this, a broad-shouldered character gets wide arms
+     and a heavy one gets a fat head. */
+  const neckX=1/(b.build), neckZ=1/(b.build);
+  set('neck', neckX/(b.shoulders),1,neckZ);
+  const shX=1/(b.shoulders*b.build), shZ=1/b.build;
+  set('leftShoulder', shX,1,shZ);
+  set('rightShoulder',shX,1,shZ);
+
+  // limb length runs along each bone's own local Y
+  set('leftUpperArm', 1,b.arms,1);
+  set('rightUpperArm',1,b.arms,1);
+  set('leftUpperLeg', 1,b.legs,1);
+  set('rightUpperLeg',1,b.legs,1);
+  // hands and feet shouldn't stretch with the limb they hang off
+  const invA=1/b.arms, invL=1/b.legs;
+  set('leftHand', 1,invA,1); set('rightHand',1,invA,1);
+  set('leftFoot', 1,invL,1); set('rightFoot',1,invL,1);
+
+  set('head', b.head/(b.build),b.head,b.head/(b.build));
+
+  /* Overall height is the one dial that does NOT go through the skeleton --
+     it scales the whole scene, which cannot distort anything and cannot fight
+     the retargeter. loadVRM() has already normalised this model to the world's
+     4-unit person, so this multiplies that. */
+  vrm.scene.scale.multiplyScalar(b.height);
+}
+
 /* Applies a saved fit record to a freshly-loaded character. The record is
    small and plain -- {hide:{top:1}, tint:{hair:1644825}} -- because it lives
    in S, which has to stay JSON-serialisable (see data.js). Nothing here

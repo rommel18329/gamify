@@ -2403,6 +2403,17 @@ function loadPlayerBody(){
     // reason dripAccessories() is: this is the moment the character actually
     // becomes the player's, and a fit saved against a different .vrm must be
     // re-applied to whatever body is on screen now.
+    /* Body BEFORE the fit, and before anything reads the rig: applyVRMBody()
+       writes bone scales, and makeVRMRetargeter() measured its rest directions
+       from the unscaled skeleton back in loadVRM(). Rebuilding the retargeter
+       here is what keeps the walk cycle aligned to the reshaped body. */
+    if(typeof applyVRMBody==='function'){
+      applyVRMBody(vrm, ch.body);
+      if(typeof makeVRMRetargeter==='function'){
+        vrm.userData=vrm.userData||{};
+        vrm.userData.retarget=makeVRMRetargeter(vrm);
+      }
+    }
     if(typeof applyVRMFit==='function') applyVRMFit(vrm, ch.fit);
     // player.pos/yaw are untouched on purpose: they're the SAME objects the
     // old playerGroup was tracking, and tick()'s walk branch already copies
