@@ -1860,6 +1860,11 @@ function loadPlayerBody(){
     // "a failed model download must never cost you an upgrade you paid for" —
     // a successful VRM swap costing one is the same failure by another door.
     dripAccessories(vrm.scene, homePlot().upgrades.drip||{});
+    // The saved fit is applied here rather than inside loadVRM(), for the same
+    // reason dripAccessories() is: this is the moment the character actually
+    // becomes the player's, and a fit saved against a different .vrm must be
+    // re-applied to whatever body is on screen now.
+    if(typeof applyVRMFit==='function') applyVRMFit(vrm, ch.fit);
     // player.pos/yaw are untouched on purpose: they're the SAME objects the
     // old playerGroup was tracking, and tick()'s walk branch already copies
     // them onto whichever object `playerGroup` currently points at, every

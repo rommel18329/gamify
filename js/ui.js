@@ -498,7 +498,62 @@ function openCharacter(){
     (customSel?'Currently selected — tap to replace it':'Pick a .vrm file exported from VRoid Studio')+
     '</span></div></div>';
   html+='<input type="file" id="vrmFileInput" accept=".vrm" style="display:none">';
+
+  /* THE FIT. Only shown for a VRM body — the default GLB/primitive character
+     has its own colour system (FITS/dripFit in models.js) and none of these
+     slots. Deliberately honest about the limit rather than pretending: with
+     one .vrm you get colourways, because the CUT of a garment is baked into
+     the mesh by VRoid and only a different export can change it. */
+  if(ch.type==='preset'||ch.type==='custom'){
+    const fit=(S.person.character&&S.person.character.fit)||{hide:{},tint:{}};
+    const catReady=typeof DRIP_FITS!=='undefined';
+    html+='<div class="tkh">THE FIT</div>';
+    if(!catReady){
+      html+='<div class="tkdone">Still loading — reopen this in a second.</div>';
+    } else {
+      html+='<div class="note">Colours apply the next time you ENTER. Different '+
+        '<b>cuts</b> — oversized, franela, baggy — are separate .vrm exports, not '+
+        'colours; add one and it shows up here as its own option.</div>';
+      FIT_SLOTS.forEach(slot=>{
+        const label={hair:'HAIR',top:'TOP',bottom:'BOTTOM',shoes:'SHOES'}[slot];
+        html+='<div class="tkh">'+label+'</div>';
+        (DRIP_FITS[slot]||[]).forEach(f=>{
+          const lock=fitLock(f);
+          const cur=(fit.tint&&fit.tint[slot]!==undefined?fit.tint[slot]:null);
+          const sel=(f.tint==null&&cur===null)||(f.tint!=null&&cur===f.tint);
+          const sw=f.tint==null?'':'<span style="display:inline-block;width:.85em;height:.85em;'+
+            'border-radius:3px;vertical-align:-1px;margin-right:.45em;background:#'+
+            f.tint.toString(16).padStart(6,'0')+'"></span>';
+          const cue = lock.ok
+            ? (f.tier==='earned'?'Earned — '+f.why
+               : f.tier==='cash'?'Owned' : 'Comes with the character')
+            : (f.tier==='earned'?'Locked — '+lock.why : 'Tap to buy — '+lock.why);
+          html+='<div class="row'+(sel?' done':'')+(lock.ok?'':' lk')+'" '+
+            'data-fit="'+slot+':'+f.id+'">'+
+            '<div class="ck">'+(sel?'✓':'')+'</div>'+
+            '<div class="nm">'+sw+f.name+'<span class="cue">'+cue+'</span></div></div>';
+        });
+      });
+    }
+  }
   document.getElementById('sheetBody').innerHTML=html;
+  document.querySelectorAll('#sheetBody [data-fit]').forEach(el=>{
+    bindTap(el,()=>{
+      const parts=el.getAttribute('data-fit').split(':');
+      const slot=parts[0], f=fitEntry(slot,parts[1]);
+      if(!f) return;
+      let lock=fitLock(f);
+      if(!lock.ok){
+        if(f.tier!=='cash'){ toast('Not yet — '+f.why); return; }
+        if(!buyFit(f)){ toast('Short by 💵'+(f.price-S.cash).toLocaleString()); return; }
+        toast('Bought '+f.name);
+      }
+      const c=S.person.character;
+      c.fit=c.fit||{hide:{},tint:{}}; c.fit.tint=c.fit.tint||{};
+      if(f.tint==null) delete c.fit.tint[slot]; else c.fit.tint[slot]=f.tint;
+      save(); openCharacter();
+    });
+  });
   document.querySelectorAll('#sheetBody [data-char]').forEach(el=>{
     bindTap(el,()=>{
       const v=el.getAttribute('data-char');
