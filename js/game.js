@@ -265,6 +265,25 @@ function limb(rTop,rBot,len,color,opts){
   const j2=M(new THREE.SphereGeometry(rBot*1.02,14,10),color,opts); j2.position.y=-len/2; g.add(j2);
   return g;
 }
+/* One palm frond: a chain of flattened tapering segments, each rotated a
+   little further down than the last, so the blade ARCS instead of sticking out
+   straight. This is the whole difference between a palm and a bottle brush —
+   the old fronds were round cones fanned off a single point, which reads as
+   spikes from any angle. Segments pass {ink:false}: an outline on each of a
+   few dozen adjacent slivers is noise and doubles the mesh count for nothing
+   (same rule as the rejas bars and zinc ribs). */
+function frondArc(len,wid,col,segs,droop){
+  const root=new THREE.Group(); let cur=root;
+  for(let s=0;s<segs;s++){
+    const t=s/segs;
+    const holder=new THREE.Group(); holder.rotation.x=droop/segs;
+    const seg=M(new THREE.BoxGeometry(wid*(1-t*.75),.045,len/segs),col,{ink:false});
+    seg.position.z=len/segs/2; holder.add(seg);
+    const next=new THREE.Group(); next.position.z=len/segs; holder.add(next);
+    cur.add(holder); cur=next;
+  }
+  return root;
+}
 function torsoGeo(shoulder,waist,len){
   const pts=[];
   [[waist*.92,0],[waist,.16],[waist*1.02,.36],[shoulder*.90,.62],[shoulder,.82],[shoulder*.86,.96],[shoulder*.5,1.0]]
@@ -363,49 +382,136 @@ function makePerson(outfit,skin,build,opts){
 }
 
 /* ---- car ---- */
+/* THE CAR: a 1996-2000 Civic EK three-door hatchback, built from primitives.
+   Shape only -- no badge, no maker's mark, no model lettering anywhere on it,
+   for exactly the reason the colmado signage is generic: a silhouette is not a
+   trademark, a logo is.
+
+   Proportions come from the real car rather than from taste. A Civic EK is
+   4.18 m long, 1.70 wide, 1.36 tall on a 2.62 m wheelbase, so against this
+   world's fixed 4-unit-tall person the ratios are 2.4 : 0.97 : 0.78 and the
+   wheelbase is 1.5x the person's height. CAR_LENGTH (9.6) already lands on
+   that 2.4x figure, which is why the base geometry here is laid out at 4.7 and
+   scaled at the end -- the same one-source-of-truth rule modelCar() follows.
+
+   Built nose-along-+Z like everything else that represents this car (the
+   cannon.js chassis Box, the old loaded OBJ), so no rotation offset exists
+   anywhere -- see the note above CAR_SPOT for what a stray offset cost last
+   time. */
+/* THE CAR: a 1996-2000 Civic EK three-door hatchback, built from primitives.
+   Shape only -- no badge, no maker's mark, no model lettering anywhere on it,
+   for exactly the reason the colmado signage is generic: a silhouette is not a
+   trademark, a logo is.
+
+   The body is ONE EXTRUDED SIDE PROFILE, not an assembly of boxes. An earlier
+   version built the screen, roof and hatch as separate rotated slabs and they
+   read as loose panels hovering over a flatbed -- there was no continuous
+   surface anywhere, because there wasn't one. A car's whole identity lives in
+   an unbroken side outline (cowl -> screen rake -> roof -> hatch fall), so the
+   outline is defined once as a 2D shape and swept across the width.
+
+   Proportions come from the real car, not from taste: 4.18 m long, 1.70 wide,
+   1.36 tall on a 2.62 m wheelbase, which against this world's fixed 4-unit
+   person is 2.4 : 0.97 : 0.78 with the wheelbase at 1.5x person height.
+   CAR_LENGTH (9.6) already sits on that 2.4x figure, so the profile is laid
+   out at 4.7 and scaled once at the end -- CAR_LENGTH stays the single source
+   of truth, exactly as modelCar() treats it.
+
+   Nose along +Z like every other representation of this car (the cannon.js
+   chassis Box, the collider), so no rotation offset exists anywhere. */
 function makeCar(veh){
   const v=veh||homePlot().upgrades.vehicle;
-  const tier=v.tier, paint=v.paint, mods=v.mods;
+  const paint=v.paint, mods=v.mods;
   const g=new THREE.Group();
-  const isTruck=tier===3, isSUV=(tier===2||tier===6), isCoupe=(tier===4||tier===5);
-  const len=isTruck?5.6:isSUV?5.0:isCoupe?4.4:4.7;
-  const hgt=isSUV?1.15:isTruck?1.20:isCoupe?.80:.95;
-  const lo=mods.tune>=2?-.12:0;
-  // Built nose-along-+Z, matching BOTH the loaded car model (its Headlights
-  // material sits at z=+1.99, its TailLights at z=-1.88) and the cannon.js
-  // chassis (a Box of CAR_LENGTH/2 along z). All three share one convention so
-  // no rotation offset is needed anywhere — see the note above CAR_SPOT.
-  const body=M(new THREE.BoxGeometry(2.05,hgt,len),paint,{inkT:.022});
-  body.position.y=.86+hgt/2+lo; g.add(body);
-  const nose=M(new THREE.SphereGeometry(1.05,18,14),paint,{ink:false});
-  nose.scale.set(.98,hgt/2.1,.30); nose.position.set(0,.86+hgt/2+lo,len/2); g.add(nose);
-  const tail=nose.clone(); tail.position.z=-len/2; g.add(tail);
-  const glass=mods.tint>=1?0x090C10:0x35566B;
-  const cabW=isTruck?2.1:len*.52;
-  const cab=M(new THREE.SphereGeometry(1,20,14),glass,{inkT:.03,rimPow:1.5,rim:0xBBDDFF});
-  cab.scale.set(.92,.46,cabW/2); cab.position.set(0,.86+hgt+.30+lo,isTruck?.4:0); g.add(cab);
-  if(isTruck){ const bed=M(new THREE.BoxGeometry(1.95,.5,2.3),paint,{inkT:.026});
-    bed.position.set(0,.86+hgt/2+.28+lo,-1.6); g.add(bed); }
+  const lo=mods.tune>=2?-.10:0;
+  const glass=mods.tint>=1?0x0A0D12:0x33556B;
+  const L=4.7, W=1.88, wr=.37, wheelZ=1.44;
+
+  /* The outline, front to back along +Z. Every vertex is a real feature: the
+     bumper step, the headlight shoulder, the cowl where the screen starts, the
+     top of the A-pillar, the back of the roof, and the two-stage fall of the
+     hatch down to the tail lamps. */
+  /* The outline as one closed loop: nose -> hood -> screen -> roof -> hatch ->
+     tail down the top, then back along the bottom with the sill LIFTING over
+     each wheel. Putting the arches in the profile is what seats the wheels in
+     the body -- an earlier version drew them as black boxes stuck on the flank
+     and the car looked like it was hovering above four loose tyres. The hatch
+     also falls steeply to a near-vertical tail: a gradual taper there reads as
+     a notchback saloon, which is the wrong car entirely. */
+  const prof=[
+    [ 2.35,.34],[ 2.35,.66],[ 2.20,.82],[ 1.62,.90],[ 1.02,.96],
+    [ 0.34,1.45],[-0.98,1.45],[-2.04,1.00],[-2.28,.74],[-2.33,.56],[-2.33,.34],
+    [-2.02,.34],[-1.86,.66],[-1.44,.76],[-1.02,.66],[-0.86,.36],
+    [ 0.86,.36],[ 1.02,.66],[ 1.44,.76],[ 1.86,.66],[ 2.02,.34]
+  ];
+  const shape=new THREE.Shape();
+  shape.moveTo(prof[0][0],prof[0][1]);
+  for(let i=1;i<prof.length;i++) shape.lineTo(prof[i][0],prof[i][1]);
+  shape.lineTo(prof[0][0],prof[0][1]);
+  const bodyGeo=new THREE.ExtrudeGeometry(shape,{depth:W,bevelEnabled:false});
+  /* ExtrudeGeometry builds in local XY and sweeps along local +Z. Rotating
+     -90 degrees about Y maps local X onto world Z (the car's length) and local
+     Z onto world -X (its width), so the profile ends up running nose-to-tail
+     and the sweep runs across the car. */
+  const body=M(bodyGeo,paint,{inkT:.022});
+  body.rotation.y=-Math.PI/2; body.position.set(W/2,lo,0); g.add(body);
+
+  /* Glass sits just proud of the body surface on the same angles the profile
+     already established, so it can never drift out of line with the shell. */
+  const pane=(x1,y1,x2,y2,w,col)=>{
+    const dz=x2-x1, dy=y2-y1, len=Math.hypot(dz,dy);
+    const m=M(new THREE.BoxGeometry(w,len,.05),col,{inkT:.026,rimPow:1.5,rim:0xBBDDFF});
+    m.position.set(0,(y1+y2)/2+lo,(x1+x2)/2);
+    m.rotation.x=Math.atan2(dz,dy);
+    return m;
+  };
+  g.add(pane(1.02,.96,0.34,1.45,W-.16,glass));      // windscreen
+  g.add(pane(-0.98,1.45,-2.04,1.00,W-.18,glass));   // hatch glass
+  [1,-1].forEach(sx=>{
+    const door=M(new THREE.BoxGeometry(.05,.38,1.00),glass,{ink:false});
+    door.position.set(sx*(W/2+.005),1.14+lo,.24); g.add(door);
+    const qtr=M(new THREE.BoxGeometry(.05,.30,.46),glass,{ink:false});
+    qtr.position.set(sx*(W/2+.005),1.14+lo,-.62); g.add(qtr);
+    const pil=M(new THREE.BoxGeometry(.06,.46,.09),paint,{ink:false});
+    pil.position.set(sx*(W/2+.01),1.16+lo,-.28); g.add(pil);
+    const mir=M(new THREE.BoxGeometry(.16,.09,.11),paint,{ink:false});
+    mir.position.set(sx*(W/2+.10),1.00+lo,.76); g.add(mir);
+    const skirt=M(new THREE.BoxGeometry(.08,.13,1.70),0x1D2026,{ink:false});
+    skirt.position.set(sx*(W/2+.01),.40+lo,0); g.add(skirt);
+  });
+
+  const grille=M(new THREE.BoxGeometry(W-.60,.12,.09),0x14171C,{ink:false});
+  grille.position.set(0,.72+lo,L/2+.03); g.add(grille);
+  const intake=M(new THREE.BoxGeometry(W-.44,.14,.08),0x14171C,{ink:false});
+  intake.position.set(0,.42+lo,L/2+.03); g.add(intake);
+
+  [.58,-.58].forEach(x=>{
+    const hl=new THREE.Mesh(new THREE.BoxGeometry(.50,.14,.09),
+      new THREE.MeshBasicMaterial({color:0xFFF6D0}));
+    hl.position.set(x,.80+lo,L/2+.01); g.add(hl);
+    const tl=new THREE.Mesh(new THREE.BoxGeometry(.20,.34,.08),
+      new THREE.MeshBasicMaterial({color:0xD8412F}));
+    tl.position.set(x,.72+lo,-2.30+lo*0+.02); g.add(tl);
+  });
+
+  /* A torus's hole axis is +Z and a cylinder's is +Y, so the tyre and its rim
+     need DIFFERENT rotations to end up pointing the same way -- these were
+     perpendicular to each other in an earlier build of the car. */
   const rimCol=mods.wheels>=2?0xE9E7DA:mods.wheels>=1?0x9CA0AC:0x585D55;
-  const wr=mods.wheels>=2?.50:.45;
-  // wheels sit on the left/right flanks (x) and along the wheelbase (z), so
-  // every axle points along X: a torus's hole axis is +Z by default, a
-  // cylinder's is +Y, hence the two different rotations to reach the same axis
-  [len/2-.95,-(len/2-.95)].forEach(z=>{
-    [1.02,-1.02].forEach(x=>{
-      const tyre=M(new THREE.TorusGeometry(wr*.78,wr*.30,10,18),0x13161A,{inkT:.05});
-      tyre.rotation.y=Math.PI/2; tyre.position.set(x,wr+lo,z); g.add(tyre);
-      const rim=M(new THREE.CylinderGeometry(wr*.55,wr*.55,.30,14),rimCol,{inkT:.05});
-      rim.rotation.z=Math.PI/2; rim.position.set(x,wr+lo,z); g.add(rim);
+  const rr=mods.wheels>=2?wr*1.06:wr;
+  [wheelZ,-wheelZ].forEach(z=>{
+    [1,-1].forEach(sx=>{
+      const x=sx*(W/2-.05);
+      const tyre=M(new THREE.TorusGeometry(rr*.78,rr*.32,10,18),0x13161A,{inkT:.05});
+      tyre.rotation.y=Math.PI/2; tyre.position.set(x,rr+lo,z); g.add(tyre);
+      const rim=M(new THREE.CylinderGeometry(rr*.56,rr*.56,.22,14),rimCol,{inkT:.05});
+      rim.rotation.z=Math.PI/2; rim.position.set(x,rr+lo,z); g.add(rim);
     });
   });
-  [.66,-.66].forEach(x=>{
-    const hl=new THREE.Mesh(new THREE.SphereGeometry(.17,12,10),new THREE.MeshBasicMaterial({color:0xFFF6D0}));
-    hl.scale.set(1,.7,.4); hl.position.set(x,1.05+lo,len/2+.06); g.add(hl);
-  });
-  g.userData.tier=tier;
-  carExtras(g,mods,len,hgt,lo);
-  g.scale.setScalar(CAR_LENGTH/4.7);   // every dimension above was tuned against a 4.7-unit default tier
+
+  g.userData.tier=v.tier;
+  carExtras(g,mods,L,.62,lo);
+  g.scale.setScalar(CAR_LENGTH/L);
   return g;
 }
 
@@ -528,25 +634,59 @@ function buildGround(){
    is a real change to the geometry, not an oversight. */
 const AVE_X=9, AVE_W=9, AVE_Z0=-20, AVE_Z1=70;
 const MARG_Z=23, MARG_W=9;
+/* A street sign with a real bracket, a drop shadow on the lettering, a bolt
+   pair and a stop plate under it. The old version was a flat green rectangle
+   floating at the top of a bare post -- legible, but it read as a placeholder
+   label rather than as a thing bolted to a pole on a corner. */
 function streetSign(text,x,z,rotY){
   const c=document.createElement('canvas'); c.width=512; c.height=96;
   const ctx=c.getContext('2d');
   ctx.fillStyle='#1B6B3A'; ctx.fillRect(0,0,512,96);
   ctx.strokeStyle='#F2F0EA'; ctx.lineWidth=6; ctx.strokeRect(6,6,500,84);
-  ctx.fillStyle='#F2F0EA'; ctx.font='bold 50px sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(text,256,50);
+  ctx.font='bold 50px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillText(text,258,53);   // drop shadow
+  ctx.fillStyle='#F2F0EA'; ctx.fillText(text,256,50);
   const tex=new THREE.CanvasTexture(c);
+
   const g=new THREE.Group();
-  const post=M(new THREE.CylinderGeometry(.07,.09,3.2,8),0x3D3A32,{inkT:.06}); post.position.y=1.6; g.add(post);
+  const post=M(new THREE.CylinderGeometry(.07,.09,3.4,8),0x3D3A32,{inkT:.06});
+  post.position.y=1.7; g.add(post);
+  const base=M(new THREE.CylinderGeometry(.15,.19,.22,10),0x6E6A62,{ink:false});
+  base.position.y=.11; g.add(base);
+  const bracket=M(new THREE.BoxGeometry(.30,.10,.10),0x3D3A32,{ink:false});
+  bracket.position.set(0,3.05,0); g.add(bracket);
+
   // two single-sided plates back to back rather than one DoubleSide plate — a
   // DoubleSide material mirrors the same texture onto its back face, which
   // reads as reversed, unreadable text to traffic approaching from behind it
   const mat=new THREE.MeshBasicMaterial({map:tex});
   const plateA=new THREE.Mesh(new THREE.PlaneGeometry(3.4,.64),mat);
-  plateA.position.set(0,3.05,.01); g.add(plateA);
+  plateA.position.set(0,3.05,.075); g.add(plateA);
   const plateB=new THREE.Mesh(new THREE.PlaneGeometry(3.4,.64),mat);
-  plateB.position.set(0,3.05,-.01); plateB.rotation.y=Math.PI; g.add(plateB);
+  plateB.position.set(0,3.05,-.075); plateB.rotation.y=Math.PI; g.add(plateB);
+  [-1.5,1.5].forEach(bx=>{
+    const bolt=M(new THREE.CylinderGeometry(.035,.035,.10,6),0xB6B4AC,{ink:false});
+    bolt.rotation.x=Math.PI/2; bolt.position.set(bx,3.05,.11); g.add(bolt);
+  });
+
+  // PARE — the Dominican stop sign, under the street name on the same pole
+  const sc=document.createElement('canvas'); sc.width=128; sc.height=128;
+  const sx2=sc.getContext('2d');
+  sx2.fillStyle='#B4241C'; sx2.beginPath();
+  for(let i=0;i<8;i++){ const a2=Math.PI/8+i*Math.PI/4;
+    const px=64+Math.cos(a2)*60, py=64+Math.sin(a2)*60;
+    i?sx2.lineTo(px,py):sx2.moveTo(px,py); }
+  sx2.closePath(); sx2.fill();
+  sx2.strokeStyle='#F2F0EA'; sx2.lineWidth=5; sx2.stroke();
+  sx2.fillStyle='#F2F0EA'; sx2.font='bold 40px sans-serif';
+  sx2.textAlign='center'; sx2.textBaseline='middle'; sx2.fillText('PARE',64,66);
+  const stex=new THREE.CanvasTexture(sc);
+  const smat=new THREE.MeshBasicMaterial({map:stex,transparent:true});
+  const sA=new THREE.Mesh(new THREE.PlaneGeometry(.78,.78),smat);
+  sA.position.set(0,2.25,.06); g.add(sA);
+  const sB=new THREE.Mesh(new THREE.PlaneGeometry(.78,.78),smat);
+  sB.position.set(0,2.25,-.06); sB.rotation.y=Math.PI; g.add(sB);
+
   g.position.set(x,0,z); g.rotation.y=rotY;
   scene.add(g);
 }
@@ -626,6 +766,61 @@ function roofKit(g,x,y,z,spanX,spanZ){
    front-door spot stays at local z=5.62. buildingColliders(), spots() and the
    security props all derive from the same local numbers via plotToWorld(),
    rather than each keeping its own copy of an absolute x. */
+/* The stuff that says PEOPLE LIVE HERE. None of it is an upgrade, nothing
+   reads it from a record and nothing is interactive -- it exists because a
+   wall with nothing bolted to it reads as an architectural model rather than
+   as somebody's house. Kept to small cheap pieces with {ink:false}: outlining
+   a couple of dozen little objects per building is noise and doubles the mesh
+   count for nothing, the same rule the rejas bars and zinc ribs follow.
+
+   Takes a PARENT and plot-local coordinates, never S and never a plot record,
+   so a neighbour's house gets the same treatment from the same call. */
+function livedIn(parent,opt){
+  const o=opt||{}, x=o.x||0, z=o.z||0, w=o.w||8, h=o.h||3.4, face=o.face||1;
+  // split-unit air conditioner, bracketed high on the wall
+  const ac=M(new THREE.BoxGeometry(1.05,.52,.38),nightMode?0xB6B2A6:0xE9E7DA,{ink:false});
+  ac.position.set(x-w*.30,h-.55,z+face*(o.d||3.1)); parent.add(ac);
+  const acGrill=M(new THREE.BoxGeometry(.92,.36,.05),nightMode?0x8A877C:0xC9C6B8,{ink:false});
+  acGrill.position.set(x-w*.30,h-.55,z+face*((o.d||3.1)+.20)); parent.add(acGrill);
+  const acPipe=M(new THREE.CylinderGeometry(.035,.035,1.5,6),0xB6B4AC,{ink:false});
+  acPipe.position.set(x-w*.30+.55,h-1.35,z+face*(o.d||3.1)); parent.add(acPipe);
+
+  // electricity meter in its little box, with the drop coming down to it
+  const mbox=M(new THREE.BoxGeometry(.34,.44,.20),nightMode?0x8A877C:0xC9C6B8,{ink:false});
+  mbox.position.set(x+w*.34,1.9,z+face*(o.d||3.1)); parent.add(mbox);
+  const mface=M(new THREE.CylinderGeometry(.11,.11,.05,10),0x2A3640,{ink:false});
+  mface.rotation.x=Math.PI/2;
+  mface.position.set(x+w*.34,1.95,z+face*((o.d||3.1)+.12)); parent.add(mface);
+  const svc=M(new THREE.BoxGeometry(.05,2.4,.05),0x2B2B2B,{ink:false});
+  svc.position.set(x+w*.34,3.1,z+face*((o.d||3.1)+.02)); parent.add(svc);
+
+  // laundry line along the side, with a few things actually on it
+  if(o.laundry!==false){
+    const lz=z+face*((o.d||3.1)-.5);
+    const wire=M(new THREE.BoxGeometry(w*.66,.03,.03),0x8A8577,{ink:false});
+    wire.position.set(x,2.55,lz); parent.add(wire);
+    const cols=[0xE9E7DA,0x2E5FA3,0xC4463C,0xE8C567,0xF2F0EA];
+    for(let i=0;i<5;i++){
+      const cw=.34+((i*13)%6)/16, ch=.52+((i*7)%5)/9;
+      const cloth=M(new THREE.BoxGeometry(cw,ch,.03),cols[i],{ink:false});
+      cloth.position.set(x-w*.28+i*(w*.14),2.55-ch/2,lz);
+      cloth.rotation.z=((i%3)-1)*.05; parent.add(cloth);
+    }
+  }
+
+  // potted plants either side of the door
+  (o.pots||[[-1.5,0],[1.5,0]]).forEach(pp=>{
+    const pot=M(new THREE.CylinderGeometry(.20,.15,.30,10),nightMode?0x6B4530:0xA4603E,{ink:false});
+    pot.position.set(x+pp[0],.15,z+face*((o.d||3.1)+.55+pp[1])); parent.add(pot);
+    for(let k=0;k<3;k++){
+      const leaf=M(new THREE.IcosahedronGeometry(.22,0),nightMode?0x25452F:0x4E8F3F,{ink:false});
+      leaf.position.set(x+pp[0]+((k%3)-1)*.13,.42+k*.11,
+        z+face*((o.d||3.1)+.55+pp[1])+((k%2)-.5)*.12);
+      leaf.scale.set(1,.7,1); parent.add(leaf);
+    }
+  });
+}
+
 function buildHouse(plot,parent){
   const house=new THREE.Group();
   /* The repaint is a real material change, not a number: an unpainted house is
@@ -694,6 +889,7 @@ function buildHouse(plot,parent){
   const meter=M(new THREE.BoxGeometry(.5,.7,.24),nightMode?0x3D444C:0x5A6470,{inkT:.05});
   meter.position.set(6.4,3.7,5.6); house.add(meter);
 
+  livedIn(house,{x:0,z:0,w:14,h:4.2,d:5.4,face:1});
   house.position.set(0,0,-2);              // local to the plot
   parent.add(house);
   if(plot===homePlot()) world.house=house;  // only mine is an interaction target
@@ -718,6 +914,7 @@ function buildGarage(plot,parent){
   for(let i=1;i<5;i++){   // roll-up door slats
     const line=M(new THREE.BoxGeometry(5.6,.05,.02),0x24262C,{ink:false}); line.position.set(0,.5+i*.62,4.16); garage.add(line);
   }
+  livedIn(garage,{x:0,z:0,w:6,h:3.6,d:4.0,face:1,laundry:false,pots:[[2.2,0]]});
   garage.position.set(11,0,-3.5);          // +11: the same offset from the house it always had
   parent.add(garage);
   if(plot===homePlot()) world.garage=garage;
@@ -785,6 +982,8 @@ function buildColmado(colPos){
   colmado.position.copy(colPos);
   scene.add(colmado); world.colmado=colmado;
 
+  livedIn(colmado,{x:0,z:0,w:9,h:4.0,d:4.2,face:1,laundry:false,
+    pots:[[-3.0,0],[3.0,0]]});
   // colmado concrete patio (colorful painted slab, a barrio staple)
   const patio=M(new THREE.CircleGeometry(7,24), nightMode?0x4A4038:0xE0C878, {ink:false,lift:.04});
   patio.rotation.x=-Math.PI/2; patio.position.set(colPos.x,.015,colPos.z+7);
@@ -794,9 +993,45 @@ function buildColmado(colPos){
 /* ---- domino table + seated players ---- */
 function buildDominoScene(colPos){
   const dTable=new THREE.Group();
-  const tTop=M(new THREE.CylinderGeometry(1.3,1.3,.12,16), 0x8B5A3C, {inkT:.03});
+  /* A plastic patio table with a proper rim and four splayed legs, four stools
+     around it, and the things that are always on it: a bottle, cups, an
+     ashtray. The old version was a disc on a single post with tiles on top --
+     read as a mushroom, and nothing about it said anyone sat here. */
+  const tTop=M(new THREE.CylinderGeometry(1.3,1.3,.09,20), 0xE4E0D4, {inkT:.03});
   tTop.position.y=1.0; dTable.add(tTop);
-  const tLeg=limb(.09,.09,1.0, 0x3A2A1C, {inkT:.06}); tLeg.position.y=.5; dTable.add(tLeg);
+  const tRim=M(new THREE.TorusGeometry(1.3,.055,8,24), 0xCFC9B8, {ink:false});
+  tRim.position.y=.97; tRim.rotation.x=Math.PI/2; dTable.add(tRim);
+  [[.8,.8],[-.8,.8],[.8,-.8],[-.8,-.8]].forEach(([lx,lz])=>{
+    const lg=limb(.05,.07,.98, 0xCFC9B8, {ink:false});
+    lg.position.set(lx,.49,lz);
+    lg.rotation.set(lz*.10,0,-lx*.10); dTable.add(lg);
+  });
+  // four stools, one per player
+  [[1.95,0],[-1.95,0],[0,1.95],[0,-1.95]].forEach(([sx,sz],i)=>{
+    const seat=M(new THREE.CylinderGeometry(.36,.34,.10,12),
+      [0xC4463C,0x2E5FA3,0xE8C567,0x3F6B34][i], {inkT:.04});
+    seat.position.set(sx,.52,sz); dTable.add(seat);
+    const back=M(new THREE.BoxGeometry(.62,.44,.07),
+      [0xC4463C,0x2E5FA3,0xE8C567,0x3F6B34][i], {inkT:.04});
+    back.position.set(sx*1.16,.80,sz*1.16);
+    back.rotation.y=Math.atan2(sx,sz)+Math.PI/2; dTable.add(back);
+    for(let k=0;k<3;k++){
+      const a2=k/3*Math.PI*2;
+      const lg=limb(.035,.045,.52,0x8A8577,{ink:false});
+      lg.position.set(sx+Math.cos(a2)*.22,.26,sz+Math.sin(a2)*.22); dTable.add(lg);
+    }
+  });
+  // what is always on the table
+  const bottle=M(new THREE.CylinderGeometry(.075,.095,.42,10),0x3F6B34,{inkT:.04});
+  bottle.position.set(.62,1.26,.42); dTable.add(bottle);
+  const neck=M(new THREE.CylinderGeometry(.035,.05,.16,8),0x3F6B34,{ink:false});
+  neck.position.set(.62,1.54,.42); dTable.add(neck);
+  [[-.55,.5],[-.35,.72],[.18,.78]].forEach(([cx,cz])=>{
+    const cup=M(new THREE.CylinderGeometry(.055,.042,.13,10),0xF2EFE6,{ink:false});
+    cup.position.set(cx,1.11,cz); dTable.add(cup);
+  });
+  const tray=M(new THREE.CylinderGeometry(.16,.14,.05,12),0x8A9AA0,{ink:false});
+  tray.position.set(-.75,1.07,-.55); dTable.add(tray);
 
   /* actual domino tiles scattered on the table — white with black pips */
   const tileM=new THREE.MeshBasicMaterial({color:0xF2EFE6});
@@ -877,20 +1112,50 @@ function buildDominoScene(colPos){
 }
 
 /* ---- string lights across the colmado patio ---- */
+/* Leaning creosote poles with a crossarm, insulators, a bracket lamp and a
+   bundle of drop lines. The old version was a bare tapered post with NO lamp
+   head at all — the light came entirely from separate glowing spheres strung
+   between posts, so the post itself read as a fence stake. The tangle is the
+   character here; a clean pole looks suburban and this block is not. */
 function buildStreetLights(colPos){
-  const lightPosts=[[colPos.x-6,colPos.z+4],[colPos.x+6,colPos.z+4],[colPos.x-6,colPos.z+13],[colPos.x+6,colPos.z+13]];
-  lightPosts.forEach(([x,z])=>{
-    const post=limb(.08,.10,3.4,0x4A3B2A,{inkT:.06}); post.position.set(x,1.7,z); scene.add(post);
+  const lightPosts=[[colPos.x-6,colPos.z+4],[colPos.x+6,colPos.z+4],
+                    [colPos.x-6,colPos.z+13],[colPos.x+6,colPos.z+13]];
+  const lensM=new THREE.MeshBasicMaterial({color:0xFFE9A0});
+  lightPosts.forEach(([x,z],i)=>{
+    const g=new THREE.Group(); const h=5.4;
+    const face=(x<colPos.x)?1:-1;              // lamp arm points at the street
+    const post=limb(.13,.18,h,nightMode?0x3E2F21:0x5C4632,{inkT:.05});
+    post.position.y=h/2; post.rotation.z=.045*face; g.add(post);
+    const arm=M(new THREE.BoxGeometry(1.7,.12,.14),nightMode?0x3E2F21:0x5C4632,{inkT:.04});
+    arm.position.set(0,h-.5,0); g.add(arm);
+    [-.62,-.2,.2,.62].forEach(ix=>{
+      const ins=M(new THREE.CylinderGeometry(.06,.07,.17,8),0x3A4A55,{ink:false});
+      ins.position.set(ix,h-.34,0); g.add(ins);
+    });
+    const head=M(new THREE.CylinderGeometry(.24,.14,.22,10),nightMode?0x55524A:0x7C7870,{inkT:.035});
+    head.position.set(.62*face,h-1.1,0); g.add(head);
+    const lens=new THREE.Mesh(new THREE.CylinderGeometry(.18,.12,.05,10),lensM);
+    lens.position.set(.62*face,h-1.24,0); g.add(lens);
+    // drop lines running off toward the next pole
+    for(let k=0;k<6;k++){
+      const w=M(new THREE.BoxGeometry(.035,.035,3.6),0x2B2B2B,{ink:false});
+      w.position.set(-.55+k*.22,h-.42-((k%3)*.12),-1.7); w.rotation.x=.05; g.add(w);
+    }
+    if(nightMode){ const pl=new THREE.PointLight(0xFFD98A,.55,9);
+      pl.position.set(x+.62*face,h-1.3,z); scene.add(pl); }
+    g.position.set(x,0,z); g.rotation.y=(i<2?0:Math.PI);
+    scene.add(g);
   });
+  // the strung bulb line between the two street-side poles stays: it is what
+  // actually lights the domino table at night
   const bulbM=new THREE.MeshBasicMaterial({color:0xFFE9A0});
   for(let i=0;i<18;i++){
     const t=i/17;
     const x=lightPosts[0][0]*(1-t)+lightPosts[1][0]*t;
     const z=lightPosts[0][1]+Math.sin(t*Math.PI)*-0.6;
     const sag=Math.sin(t*Math.PI)*0.7;
-    const bulb=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8), bulbM);
-    bulb.position.set(x, 3.35-sag, z); scene.add(bulb);
-    if(nightMode&&i%3===0){ const pl=new THREE.PointLight(0xFFD98A,.5,6); pl.position.copy(bulb.position); scene.add(pl); }
+    const bulb=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8),bulbM);
+    bulb.position.set(x,4.15-sag,z); scene.add(bulb);
   }
 }
 
@@ -913,21 +1178,44 @@ function buildWanderers(colPos){
   world.wanderers=wanderers;
 }
 
-/* ---- palm trees along the street ---- */
+/* ---- palm trees along the street ----
+   Coconut palms: a LEANING trunk built from stacked segments that each tip a
+   little further over, ring scars at every joint, an arcing frond crown and a
+   coconut cluster. The lean is what sells it — a perfectly vertical palm reads
+   as a lamp post with leaves on. */
 function buildPalms(colPos){
   for(let i=0;i<9;i++){
     const palm=new THREE.Group();
-    const trunkH=3.4+Math.random()*1.4;
-    const trunk=limb(.14,.20,trunkH,0x6B5033,{inkT:.05}); trunk.position.y=trunkH/2; trunk.rotation.z=(Math.random()-.5)*.12; palm.add(trunk);
-    for(let k=0;k<6;k++){
-      const frond=M(new THREE.ConeGeometry(.14,1.7,6), nightMode?0x2E5240:0x4E9463, {ink:false});
-      const fa=(k/6)*Math.PI*2;
-      frond.position.set(0,trunkH+.1,0);
-      frond.rotation.set(Math.PI/2 - 0.55, 0, fa);
-      palm.add(frond);
+    const h=4.6+Math.random()*1.2, segs=7;
+    const dir=Math.random()<.5?-1:1;              // lean left or right
+    const leanStep=(.035+Math.random()*.028)*dir;
+    let x=0,y=0,lean=0;
+    for(let k=0;k<segs;k++){
+      const t=k/segs, r=.24-t*.10;
+      lean+=leanStep;
+      const seg=M(new THREE.CylinderGeometry(r*.93,r,h/segs,12),
+        nightMode?0x4A3A28:0x7A5C3E,{inkT:.045});
+      seg.position.set(x,y+h/segs/2,0); seg.rotation.z=-lean; palm.add(seg);
+      const ring=M(new THREE.TorusGeometry(r*1.03,.022,6,12),
+        nightMode?0x3A2C1D:0x5E452D,{ink:false});
+      ring.position.set(x,y+h/segs,0); ring.rotation.x=Math.PI/2; palm.add(ring);
+      x+=Math.sin(lean)*(h/segs); y+=Math.cos(lean)*(h/segs);
+    }
+    const crown=new THREE.Group();
+    crown.position.set(x,y,0); crown.rotation.z=-lean; palm.add(crown);
+    for(let k=0;k<8;k++){
+      const f=frondArc(2.2,.46,nightMode?0x2E5240:0x57A06B,4,1.05+Math.random()*.2);
+      f.rotation.y=(k/8)*Math.PI*2+Math.random()*.15;
+      f.rotation.x=-0.45; crown.add(f);
+    }
+    for(let n=0;n<4;n++){
+      const a=n/4*Math.PI*2;
+      const c=M(new THREE.SphereGeometry(.15,8,6),nightMode?0x4A3524:0x6B4A2E,{ink:false});
+      c.position.set(Math.cos(a)*.22,-.18,Math.sin(a)*.22); crown.add(c);
     }
     const side=i%2===0?-1:1;
-    palm.position.set(colPos.x+side*(9+Math.random()*3), 0, colPos.z-6+i*2.6);
+    palm.position.set(colPos.x+side*(9+Math.random()*3),0,colPos.z-6+i*2.6);
+    palm.rotation.y=Math.random()*Math.PI*2;
     scene.add(palm);
   }
 }
@@ -937,20 +1225,44 @@ function buildPalms(colPos){
    of both the perimeter fence line (x=-13.5, from the security upgrades) and
    the colmado's footprint (COLMADO_POS.x=-16, collider out to x=-21) now that
    it sits further west of the avenue. */
+/* The overhead tangle: concrete-grey poles with a real crossarm and insulators,
+   a transformer can on every third one, a service drop bundle, and lines that
+   sag at different depths. The old version was a bare pole, one flat arm and
+   four evenly-spaced wires -- too tidy to read as a barrio street, where the
+   mess overhead is half the character of the place. */
 function buildPowerLines(){
   const tops=[];
-  [-4,9,22,35].forEach(z=>{
+  [-4,9,22,35].forEach((z,i)=>{
     const pole=M(new THREE.CylinderGeometry(.18,.24,8,8),nightMode?0x5D5850:0x8A8378,{inkT:.03});
     pole.position.set(-30,4,z); scene.add(pole);
-    const arm=M(new THREE.BoxGeometry(2.2,.16,.16),nightMode?0x4A463E:0x6E675C,{ink:false});
-    arm.position.set(-30,7.4,z); scene.add(arm);
+    // stepped crossarms, the upper one carrying the primaries
+    [[7.4,2.2],[6.5,1.5]].forEach(([ay,aw],k)=>{
+      const arm=M(new THREE.BoxGeometry(aw,.16,.16),nightMode?0x4A463E:0x6E675C,{ink:false});
+      arm.position.set(-30,ay,z); scene.add(arm);
+      const n=k===0?4:3;
+      for(let ins=0;ins<n;ins++){
+        const x=-30-aw/2+ (aw/(n-1))*ins;
+        const cap=M(new THREE.CylinderGeometry(.07,.085,.20,8),0x3A4A55,{ink:false});
+        cap.position.set(x,ay+.18,z); scene.add(cap);
+      }
+    });
+    if(i%2===0){    // transformer can
+      const can=M(new THREE.CylinderGeometry(.30,.30,.72,12),nightMode?0x55524A:0x7C7870,{inkT:.03});
+      can.position.set(-29.55,5.5,z); scene.add(can);
+      const lid=M(new THREE.CylinderGeometry(.33,.33,.09,12),nightMode?0x46433B:0x6B665E,{ink:false});
+      lid.position.set(-29.55,5.92,z); scene.add(lid);
+    }
+    // service drop running toward the houses
+    const drop=M(new THREE.BoxGeometry(2.6,.05,.05),0x2B2B2B,{ink:false});
+    drop.position.set(-28.6,6.1,z); drop.rotation.z=-.16; scene.add(drop);
     tops.push(new THREE.Vector3(-30,7.4,z));
   });
   const wireM=new THREE.LineBasicMaterial({color:nightMode?0x0A0C10:0x1A1A1A});
-  for(let i=0;i<tops.length-1;i++) for(let k=0;k<4;k++){
-    const a=tops[i], b=tops[i+1], sag=.9+k*.18, off=(k-1.5)*.18, drop=k*.24, pts=[];
-    for(let s=0;s<=8;s++){
-      const t=s/8;
+  for(let i=0;i<tops.length-1;i++) for(let k=0;k<7;k++){
+    const a=tops[i], b=tops[i+1];
+    const sag=.7+((k*37)%11)/9, off=(k-3)*.16, drop=(k<4?0:.9)+((k*29)%7)/14, pts=[];
+    for(let s2=0;s2<=10;s2++){
+      const t=s2/10;
       pts.push(new THREE.Vector3(a.x+off, a.y-drop-Math.sin(t*Math.PI)*sag, a.z+(b.z-a.z)*t));
     }
     scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),wireM));
@@ -1027,6 +1339,21 @@ function buildFence(g,tier){
       g.add(wall);
       const cap=M(new THREE.BoxGeometry(len,.18,.46),nightMode?0x585343:0x8A8069,{ink:false});
       cap.position.set((x0+x1)/2,h+.09,(z0+z1)/2); cap.rotation.y=wall.rotation.y; g.add(cap);
+      /* Broken bottle glass set into the capping course -- the cheap deterrent
+         that is on top of half the walls in the barrio, and the one detail that
+         tells you what this wall is FOR. Tiny and repeated, so {ink:false}:
+         outlining a few dozen adjacent slivers is noise and doubles the mesh
+         count for nothing (same rule as the rejas bars). */
+      const shards=Math.max(6,Math.round(len/0.42));
+      for(let sI=0;sI<shards;sI++){
+        const t=(sI+.5)/shards;
+        const sx=x0+(x1-x0)*t, sz=z0+(z1-z0)*t;
+        const sh=M(new THREE.ConeGeometry(.045,.16+((sI*13)%7)/34,4),
+          nightMode?0x2F4A4E:0x6FA9A2,{ink:false});
+        sh.position.set(sx,h+.24,sz);
+        sh.rotation.set(((sI*7)%5-2)*.06,(sI*1.1)%Math.PI,((sI*11)%5-2)*.06);
+        g.add(sh);
+      }
       if(tier>=3){
         // rejas on top of the wall — the barrio standard
         const bars=rejas(len-.4,1.15,nightMode?0x1E2A32:0x2B3A44,.5);
@@ -1618,17 +1945,120 @@ const PLACEHOLDER_BUILDINGS=[
   {x:44,z:42,w:7,d:7,h:4.6},
   {x:-38,z:-6,w:6,d:8,h:4.0}      // south of C. Marginal, the house's side of the block
 ];
+/* Three fronts mixed across the block instead of one repeated box. The old
+   version was body + skirt + roof cap and nothing else: no windows, no door,
+   no roofline, so from the street every one of them was a painted crate and a
+   row of them read as a wall. */
 function buildPlaceholders(){
   const wallCols=[0xC9B896,0xB8AE96,0xA8A088,0xBFAE9E];
-  PLACEHOLDER_BUILDINGS.forEach((b,i)=>{
+
+  /* OPENINGS — the cheapest real gain: recessed windows, a door and a parapet
+     lip. Windows are what give a blank wall its scale. */
+  function openings(b,col){
     const g=new THREE.Group();
-    const body=M(new THREE.BoxGeometry(b.w,b.h,b.d),nightMode?0x5E594D:wallCols[i%wallCols.length],
+    const body=M(new THREE.BoxGeometry(b.w,b.h,b.d),col,
       {inkT:.018,map:detailMap('wall',Math.max(2,Math.round(b.w/3)),1)});
     body.position.y=b.h/2; g.add(body);
     const skirt=M(new THREE.BoxGeometry(b.w+.1,.8,b.d+.1),nightMode?0x3D3A30:0x8A8069,{inkT:.02});
     skirt.position.y=.4; g.add(skirt);
-    const roof=M(new THREE.BoxGeometry(b.w+.4,.3,b.d+.4),nightMode?0x4A463E:0xBFB6A4,{inkT:.02});
-    roof.position.y=b.h+.15; g.add(roof);
+    const floors=Math.max(1,Math.floor((b.h-1.4)/2.4));
+    const cols=Math.max(2,Math.floor(b.w/2.6));
+    for(let fl=0;fl<floors;fl++) for(let k=0;k<cols;k++){
+      const x=-b.w/2+(b.w/(cols+1))*(k+1), y=2.0+fl*2.4;
+      if(y>b.h-1.0) continue;
+      const rec=M(new THREE.BoxGeometry(1.15,1.35,.16),nightMode?0x2E2B25:0x6B6355,{ink:false});
+      rec.position.set(x,y,b.d/2+.01); g.add(rec);
+      const gl=M(new THREE.BoxGeometry(.95,1.15,.10),nightMode?0x2A3640:0x93B3C4,{ink:false});
+      gl.position.set(x,y,b.d/2+.07); g.add(gl);
+    }
+    const door=M(new THREE.BoxGeometry(1.3,2.3,.18),nightMode?0x2C231A:0x5A4632,{inkT:.02});
+    door.position.set(0,1.15,b.d/2+.02); g.add(door);
+    const par=M(new THREE.BoxGeometry(b.w+.5,.55,b.d+.5),nightMode?0x4A463E:0xBFB6A4,{inkT:.02});
+    par.position.y=b.h+.45; g.add(par);
+    return g;
+  }
+
+  /* STREET FRONT — ground-floor shop with a roll shutter and an awning, barred
+     upper windows, rooftop tinaco and rebar stubs. Deliberately speaks the same
+     vocabulary buildHouse()/buildColmado() already use, so it belongs to the
+     same street rather than looking imported. */
+  function streetFront(b,col){
+    const g=new THREE.Group();
+    const body=M(new THREE.BoxGeometry(b.w,b.h,b.d),col,
+      {inkT:.018,map:detailMap('wall',Math.max(2,Math.round(b.w/3)),1)});
+    body.position.y=b.h/2; g.add(body);
+    const skirt=M(new THREE.BoxGeometry(b.w+.12,1.1,b.d+.12),nightMode?0x39362D:0x7E7460,{inkT:.02});
+    skirt.position.y=.55; g.add(skirt);
+    const sw=Math.min(4.4,b.w*.55);
+    const shut=M(new THREE.BoxGeometry(sw,2.6,.16),nightMode?0x4A5257:0x8A9AA0,{inkT:.02});
+    shut.position.set(-b.w*.13,1.5,b.d/2+.03); g.add(shut);
+    for(let k=0;k<9;k++){
+      const rib=M(new THREE.BoxGeometry(sw-.1,.06,.06),nightMode?0x3C4347:0x6F7D82,{ink:false});
+      rib.position.set(-b.w*.13,.45+k*.27,b.d/2+.12); g.add(rib);
+    }
+    const aw=M(new THREE.BoxGeometry(sw+.8,.14,1.5),nightMode?0x6E2A24:0xC4463C,{inkT:.02});
+    aw.position.set(-b.w*.13,3.1,b.d/2+.72); aw.rotation.x=.14; g.add(aw);
+    [-sw/2-.2,sw/2-.6].forEach(x=>{
+      const po=limb(.06,.07,3.0,0x6E6A62,{ink:false});
+      po.position.set(-b.w*.13+x,1.5,b.d/2+1.4); g.add(po);
+    });
+    const cols=Math.max(2,Math.floor(b.w/3));
+    for(let k=0;k<cols;k++){
+      const x=-b.w/2+(b.w/(cols+1))*(k+1);
+      const y=Math.min(b.h-1.3,4.6);
+      const gl=M(new THREE.BoxGeometry(1.1,1.3,.10),nightMode?0x2A3640:0x93B3C4,{ink:false});
+      gl.position.set(x,y,b.d/2+.05); g.add(gl);
+      for(let bi=0;bi<5;bi++){
+        const bar=M(new THREE.BoxGeometry(.05,1.3,.05),0x3E3A33,{ink:false});
+        bar.position.set(x-.45+bi*.22,y,b.d/2+.12); g.add(bar);
+      }
+    }
+    const par=M(new THREE.BoxGeometry(b.w+.5,.6,b.d+.5),nightMode?0x46433B:0xB3AA98,{inkT:.02});
+    par.position.y=b.h+.3; g.add(par);
+    const tin=M(new THREE.CylinderGeometry(.62,.62,.95,12),nightMode?0x1D3C66:0x2E5FA3,{inkT:.03});
+    tin.position.set(b.w/2-1.6,b.h+1.05,-1.2); g.add(tin);
+    [[-b.w*.25,-b.d*.3],[b.w*.05,-b.d*.34],[b.w*.28,-b.d*.14]].forEach(c=>{
+      const st=M(new THREE.BoxGeometry(.22,1.25,.22),nightMode?0x4A483F:0xB6B4AC,{ink:false});
+      st.position.set(c[0],b.h+1.15,c[1]); g.add(st);
+      for(let r=0;r<3;r++){
+        const rb=M(new THREE.CylinderGeometry(.028,.028,.55,6),0x8A6A4A,{ink:false});
+        rb.position.set(c[0]-.06+r*.06,b.h+2.0,c[1]); g.add(rb);
+      }
+    });
+    return g;
+  }
+
+  /* STEPPED — two masses of different heights plus a stair tower, so the
+     roofline of the block stops being one flat line. */
+  function stepped(b,col){
+    const g=new THREE.Group();
+    const aW=b.w*.6, aH=b.h*1.15, bW=b.w*.46, bH=b.h*.78;
+    const A=M(new THREE.BoxGeometry(aW,aH,b.d),col,
+      {inkT:.018,map:detailMap('wall',2,1)});
+    A.position.set(-(b.w-aW)/2,aH/2,0); g.add(A);
+    const B=M(new THREE.BoxGeometry(bW,bH,b.d-1.2),nightMode?0x55503F:0xA8A088,
+      {inkT:.018,map:detailMap('wall',2,1)});
+    B.position.set(b.w/2-bW/2,bH/2,-.6); g.add(B);
+    const rA=M(new THREE.BoxGeometry(aW+.35,.45,b.d+.35),nightMode?0x4A463E:0xBFB6A4,{inkT:.02});
+    rA.position.set(A.position.x,aH+.22,0); g.add(rA);
+    const rB=M(new THREE.BoxGeometry(bW+.35,.45,b.d-1.2+.35),nightMode?0x4A463E:0xBFB6A4,{inkT:.02});
+    rB.position.set(B.position.x,bH+.22,-.6); g.add(rB);
+    const sk=M(new THREE.BoxGeometry(b.w+.1,.9,b.d+.1),nightMode?0x3D3A30:0x8A8069,{inkT:.02});
+    sk.position.y=.45; g.add(sk);
+    for(let fl=0;fl<3;fl++) for(let k=0;k<2;k++){
+      const y=1.9+fl*2.3; if(y>aH-1.0) continue;
+      const gl=M(new THREE.BoxGeometry(1.0,1.2,.10),nightMode?0x2A3640:0x93B3C4,{ink:false});
+      gl.position.set(-(b.w-aW)/2-1.1+k*2.2,y,b.d/2+.05); g.add(gl);
+    }
+    const tow=M(new THREE.BoxGeometry(1.6,1.5,1.6),nightMode?0x46433B:0xB3AA98,{inkT:.02});
+    tow.position.set(-(b.w-aW)/2+1.2,aH+.75,-1.4); g.add(tow);
+    return g;
+  }
+
+  const styles=[openings,streetFront,stepped];
+  PLACEHOLDER_BUILDINGS.forEach((b,i)=>{
+    const col=nightMode?0x5E594D:wallCols[i%wallCols.length];
+    const g=styles[i%3](b,col);
     g.position.set(b.x,0,b.z);
     scene.add(g);
   });
@@ -1784,22 +2214,74 @@ function buildBoard(){
 }
 
 /* foliage */
+/* Three species mixed across the block rather than twenty copies of one
+   shape. A row of identical trees reads as wallpaper; the eye picks out
+   repetition long before it picks out polygon count. */
 function buildFoliage(){
-  for(let i=0;i<20;i++){
+  /* SPREADING: blobs fan OUTWARD and shrink with height instead of stacking
+     into a column. Same primitive as the old tree, completely different
+     silhouette. */
+  function spreading(){
     const t=new THREE.Group();
-    const tr=limb(.16,.26,2.6,0x53381F,{inkT:.05}); tr.position.y=1.3; t.add(tr);
-    for(let k=0;k<3;k++){
-      const cr=M(new THREE.IcosahedronGeometry(1.25+Math.random()*.5,1),nightMode?0x25452F:0x54843F,{inkT:.026});
-      cr.position.set((Math.random()-.5)*1.1,3.1+k*.55,(Math.random()-.5)*1.1);
-      cr.rotation.set(Math.random(),Math.random(),Math.random()); t.add(cr);
+    const tr=limb(.17,.30,2.8,0x53381F,{inkT:.05}); tr.position.y=1.4; t.add(tr);
+    [[0,3.05,0,1.45],[1.15,2.8,.25,1.05],[-.95,2.85,-.6,1.0],
+     [.25,2.75,-1.1,.95],[-.35,3.75,.35,1.0],[.55,3.65,-.3,.85]].forEach((v,k)=>{
+      const cr=M(new THREE.IcosahedronGeometry(v[3],1),nightMode?0x25452F:0x54843F,{inkT:.026});
+      cr.position.set(v[0],v[1],v[2]);
+      cr.rotation.set(Math.random()*3,Math.random()*3,Math.random()*3);
+      cr.scale.y=.78; t.add(cr);
+    });
+    return t;
+  }
+  /* BRANCHED: a forked trunk with three real limbs, each carrying its own
+     cluster. The only one of the three with any structure close up, which
+     matters because the player walks right past these. */
+  function branched(){
+    const t=new THREE.Group();
+    const tr=limb(.20,.34,2.4,0x53381F,{inkT:.05}); tr.position.y=1.2; t.add(tr);
+    [[-0.6,.5],[0.55,-.35],[0.05,.75]].forEach((a,i)=>{
+      const br=limb(.09,.16,1.7,0x53381F,{inkT:.04});
+      br.position.set(a[0]*.5,2.9,a[1]*.5);
+      br.rotation.set(a[1]*.55,0,-a[0]*.55); t.add(br);
+      for(let k=0;k<2;k++){
+        const cr=M(new THREE.IcosahedronGeometry(.95+k*.18,1),
+          nightMode?0x25452F:0x54843F,{inkT:.026});
+        cr.position.set(a[0]*1.5,3.6+k*.5,a[1]*1.5);
+        cr.rotation.set(i+k,i*.8,k*.6); cr.scale.y=.8; t.add(cr);
+      }
+    });
+    return t;
+  }
+  /* FLAMBOYAN: the flame tree that is everywhere in Santo Domingo — a wide
+     flat-topped umbrella on a short trunk, with red bloom scattered over it.
+     The FLAT TOP is the recognisable part, not the flower colour. */
+  function flamboyan(){
+    const t=new THREE.Group();
+    const tr=limb(.22,.38,2.1,0x6A5140,{inkT:.05}); tr.position.y=1.05; t.add(tr);
+    for(let k=0;k<7;k++){
+      const a=(k/7)*Math.PI*2, r=k===0?0:1.5;
+      const cr=M(new THREE.IcosahedronGeometry(k===0?1.5:1.2,1),
+        nightMode?0x1E3B24:0x3F6B34,{inkT:.026});
+      cr.position.set(Math.cos(a)*r,2.85+(k===0?.25:0),Math.sin(a)*r);
+      cr.scale.set(1.15,.46,1.15); cr.rotation.y=a; t.add(cr);
     }
+    for(let k=0;k<9;k++){
+      const a=(k/9)*Math.PI*2+.3, r=(.7+Math.random())*1.6;
+      const bl=M(new THREE.IcosahedronGeometry(.42,0),nightMode?0x7A2620:0xC33B2E,{ink:false});
+      bl.position.set(Math.cos(a)*r,3.15,Math.sin(a)*r); bl.scale.set(1,.4,1); t.add(bl);
+    }
+    return t;
+  }
+  const species=[spreading,branched,flamboyan];
+  for(let i=0;i<20;i++){
+    const t=species[i%3]();
     const a=Math.random()*Math.PI*2, r=20+Math.random()*26;
     t.position.set(Math.cos(a)*r,0,Math.sin(a)*r);
+    t.rotation.y=Math.random()*Math.PI*2;
     // floor raised well above 1.0: at the old .75-1.65 range the smallest trees
-    // (apex ~4.2-5.95 units unscaled * .75) came out barely taller than the
-    // 4-unit-tall player — a "tree" you could look nearly level with reads as a
-    // shrub, not a tree, next to a person of fixed real height
-    const s=1.3+Math.random()*.7; t.scale.set(s,s,s);
+    // came out barely taller than the 4-unit player, and a "tree" you can look
+    // level with reads as a shrub next to a person of fixed real height
+    const sc=1.3+Math.random()*.5; t.scale.setScalar(sc);
     t.userData.foliageTree=true;
     scene.add(t);
   }
