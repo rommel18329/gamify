@@ -844,23 +844,43 @@ leaves the character in its bind pose.
 #### The wardrobe: real garment SHAPES (`DRIP_CUTS` / `wearCut`)
 
 A colourway changes what a garment is *coloured*; a **cut** changes what it
-*is*. Seven cuts — hoodie / t-shirt / franela on top, denim shorts / gym
-shorts / jeans / baggy pants below — and **not one of them was modelled for
-this project.** All seven are parts of the Quaternius "Ultimate Modular Men"
+*is*. Twelve cuts across three slots — hoodie / t-shirt / franela on top,
+denim shorts / gym shorts / jeans / baggy pants below, and five hairstyles —
+and **not one of them was modelled for this project.** All seven are parts of the Quaternius "Ultimate Modular Men"
 pack (CC0 1.0), the same pack the characters themselves come from, whose whole
 premise is that `<Character>_Body` / `_Head` / `_Legs` / `_Feet` are
 interchangeable nodes on one shared 62-bone rig across all eleven characters.
 `GARMENT_PARTS` in `js/models.js` is the only place that knows which file a cut
 lives in; `DRIP_CUTS` in `js/data.js` is the catalogue the player sees.
 
-**Four of the seven cost nothing to ship**: `Casual_Hoodie.glb` and
-`Casual_2.glb` are downloaded for the world anyway, and between them carry the
-hoodie, the t-shirt, denim shorts and jeans. Only the franela (`Beach_Body`),
-gym shorts (`Beach_Legs`) and baggy pants (`Farmer_Pants`) are their own files,
-in `assets/characters/parts/` — extracted from the pack's own glTF exports with
+**Four cost nothing to ship**: `Casual_Hoodie.glb` and `Casual_2.glb` are
+downloaded for the world anyway, and between them carry the hoodie, the
+t-shirt, jeans and the stock hairstyle. The rest live in
+`assets/characters/parts/` — extracted from the pack's own glTF exports with
 three.js's `GLTFExporter`, **meshes and skeleton only, all 24 animation clips
-stripped**, which is what keeps them at 126–333 KB instead of ~3 MB each. The
+stripped**, which is what keeps them at 112–377 KB instead of ~3 MB each. The
 clips are not needed: the retargeter already drives this rig.
+
+**The two shorts are TAILORED, not picked.** The pack ships exactly two pairs
+of shorts and both are mid-thigh, so `Shorts_Denim` and `Shorts_Gym` are the
+pack's own full-length trousers cut to a real length — 2.5in below the knee
+and 1.5in above it, measured in bind pose where the knee is `y=0.5075` and an
+inch is `0.02636`. Three things had to be right, and all three are recorded in
+`assets/characters/parts/README.md` because they are properties of the FILES,
+not of the code: cut rather than stretch (a stretched shorts mesh is weighted
+to the upper leg only and cannot bend at the knee); clamp the straddling
+triangles to the cut line (or the hem is ragged); and carry the bare leg the
+cut exposes, narrowed to 84% **only under the trouser** — a slim jean sits
+within a hair of the bare leg, and two nearly coincident surfaces z-fight as
+torn holes across the thigh, while insetting the whole leg thins the visible
+shin into a spindle.
+
+**Hair is a cut too, matched by MATERIAL rather than node name.** A hairstyle
+is one mesh weighted to the Head bone alone, but it lives inside the
+character's own `*_Head` group next to the face, eyes and brows — so
+`slotMeshes(host,'hair')` finds it by material and the swap re-parents the new
+hair onto the head the player is actually wearing, never the donor's. Taking
+the whole donor node would swap the face along with the haircut.
 
 Locking reuses `fitLock()`/`buyFit()` **unchanged** — they read `.tier`,
 `.price` and `.need` and nothing else — so a cut and a colourway cannot drift
@@ -903,12 +923,46 @@ Five things bite here, every one of them found by measuring:
   again on every slider input and re-tints an untinted slot back to `baseHex`;
   recording the donor's own value there made the inheritance quietly undo
   itself one repaint later — the shorts changed colour by themselves.
+- **What counts as "the body" depends on the slot.** `CLOTH_MAT_SKIP` treats
+  `Hair` as body — correct for a shirt, wrong for a hairstyle, where hair IS
+  the garment. Without the per-slot exception a mohawk ignored the hair colour
+  and came back in the Punk's own red.
 
-**The preview is live, and stays live.** Tapping a cut or a colourway used to
-call `openCharacter()`, which rebuilds the sheet and therefore tears down and
-re-creates the preview's WebGL context — the character blanked for a beat and
-started its spin from zero on every tap. `repaintFitRows()` patches the rows'
-tick/lock/cue state from `S` in place and leaves the model alone;
+#### Colour: a picker per slot, and why the swatches are free
+
+`TINT_SLOTS` is `skin / hair / top / bottom / shoes`, and `tintSlot()` is one
+function for all five: the three cut slots resolve through `slotMeshes()`,
+`skin` matches `Skin`/`Skin_Darker` anywhere on the character, and `shoes` is
+whatever is not skin inside a `*_Feet` node. `skin` deliberately has no
+`DRIP_CUTS` entry — you do not swap your skin, you set it.
+
+The CHARACTER sheet gives each slot an `<input type="color">` **and** the
+named presets as one-tap chips. That is why every `DRIP_FITS` entry is now
+`tier:'free'`: a gate you can walk around with a colour wheel is not a gate.
+The DRIP prices moved onto the CUTS, where a shape is a real unlock and cannot
+be dialled. `S.fits` entries bought under the old paid-colourway scheme are
+simply ignored; nothing needs migrating.
+
+A tint on the GLB character **can brighten**, unlike on a VRM — these
+materials are flat colours, not texture-driven (see "A tint MULTIPLIES"
+above). That is the whole reason a white tee works here and cannot there.
+
+**The preview is live, and STICKY.** `.charprev` is `position:sticky` under
+the sheet header, and that is not polish: the body dials and every wardrobe
+row sit below the fold on a phone, so a preview that scrolls away is a preview
+you cannot use — by the time your thumb is on a slider the character is off
+screen and editing live means nothing. Measured: after scrolling the sheet
+600px to reach the dials, the preview is still fully on screen. The dials
+themselves were never broken (bone scales apply, the mixer carries no scale
+tracks to overwrite them, and thin-vs-thick renders differ) — they were
+invisible.
+
+Tapping a cut or a colourway used to call `openCharacter()`, which rebuilds
+the sheet and therefore tears down and re-creates the preview's WebGL context
+— the character blanked for a beat and started its spin from zero on every
+tap. `repaintFitRows()` patches the rows' tick/lock/cue state, the swatch
+`.sel` chips and the pickers' values from `S` in place and leaves the model
+alone;
 `refreshCharPreview()` re-dresses it. `applyCuts()` is idempotent per slot
 (it compares `host.userData.worn[slot]` and falls through to `tintCut()`), or
 every pixel of a slider drag would clone a 62-bone rig. The preview renderer
@@ -925,9 +979,10 @@ The `blank()` copies are dead keys. The live path is the `character.` one —
 follow it; moving the data to match `blank()` would strip the fit off every
 existing save.
 
-**Cost:** +587 KB of assets, +0.78 MB on `sprout.html` (8.46 → 9.24 MB, still
-well under the 16 MB cap) and **+7 ms** to interactive behind the artifact's
-own CSP (128 → 135 ms, median of three).
+**Cost:** ~1.6 MB of assets, `sprout.html` at 10.69 MB (still well under the
+16 MB cap) and **no measurable change** to interactive behind the artifact's
+own CSP — 136 ms, median of three, against 135 ms before the hair pack and the
+tailored shorts went in. The core path never touches any of it.
 
 #### EL DRIP: the fit catalogue
 

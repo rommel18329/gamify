@@ -1241,37 +1241,42 @@ function respect(){
    would simply not work. Different CUTS (oversized, franela, baggy) are not
    colours at all and cannot come from this table: they are separate .vrm
    exports, see vrmWear() in models.js. */
-const FIT_SLOTS=['hair','top','bottom','shoes'];
+/* Colourable slots. `skin` is new and is never a CUT — you do not swap your
+   skin, you set it — which is why it has no DRIP_CUTS entry. */
+const FIT_SLOTS=['skin','hair','top','bottom','shoes'];
 const DRIP_FITS={
+  skin:[
+    {id:'skin_stock', name:'As exported',    tier:'free', tint:null},
+    {id:'skin_canela',name:'Canela',         tier:'free', tint:0xC9884F},
+    {id:'skin_indio', name:'Indio',          tier:'free', tint:0x8D5A38},
+    {id:'skin_moreno',name:'Moreno',         tier:'free', tint:0x6B4226},
+    {id:'skin_claro', name:'Claro',          tier:'free', tint:0xE0B48C}
+  ],
   hair:[
     {id:'hair_stock', name:'As exported',    tier:'free', tint:null},
-    {id:'hair_noche', name:'Noche',          tier:'cash', price:340,  tint:0x14100C},
-    {id:'hair_vino',  name:'Vino',           tier:'cash', price:520,  tint:0x4A1F22},
-    {id:'hair_azul',  name:'Azul Medianoche',tier:'earned', tint:0x1B2340, need:{m:3},
-       why:'3 habits automatic'}
+    {id:'hair_noche', name:'Noche',          tier:'free',  tint:0x14100C},
+    {id:'hair_vino',  name:'Vino',           tier:'free',  tint:0x4A1F22},
+    {id:'hair_azulmedianoche', name:'Azul Medianoche', tier:'free', tint:0x1B2340}
   ],
   top:[
     {id:'top_stock',  name:'As exported',    tier:'free', tint:null},
     {id:'top_blanco', name:'Blanco',         tier:'free', tint:0xEFEEE8},
-    {id:'top_carbon', name:'Carbón',         tier:'cash', price:260,  tint:0x24262B},
-    {id:'top_tinto',  name:'Tinto',          tier:'cash', price:480,  tint:0x6E2230},
-    {id:'top_verde',  name:'Verde Colmado',  tier:'cash', price:900,  tint:0x2C4434},
-    {id:'top_oro',    name:'Oro Viejo',      tier:'earned', tint:0x6B5A2A, need:{streak:30},
-       why:'a 30-day streak, ever'}
+    {id:'top_carbon', name:'Carbón',         tier:'free',  tint:0x24262B},
+    {id:'top_tinto',  name:'Tinto',          tier:'free',  tint:0x6E2230},
+    {id:'top_verde',  name:'Verde Colmado',  tier:'free',  tint:0x2C4434},
+    {id:'top_oroviejo', name:'Oro Viejo', tier:'free', tint:0x6B5A2A}
   ],
   bottom:[
     {id:'bot_stock',  name:'As exported',    tier:'free', tint:null},
-    {id:'bot_indigo', name:'Índigo',         tier:'cash', price:300,  tint:0x2B3A56},
-    {id:'bot_humo',   name:'Humo',           tier:'cash', price:560,  tint:0x3A3D42},
-    {id:'bot_luto',   name:'Luto',           tier:'earned', tint:0x1A1A1E, need:{m:6},
-       why:'6 habits automatic'}
+    {id:'bot_indigo', name:'Índigo',         tier:'free',  tint:0x2B3A56},
+    {id:'bot_humo',   name:'Humo',           tier:'free',  tint:0x3A3D42},
+    {id:'bot_luto', name:'Luto', tier:'free', tint:0x1A1A1E}
   ],
   shoes:[
     {id:'sho_stock',  name:'As exported',    tier:'free', tint:null},
-    {id:'sho_asfalto',name:'Asfalto',        tier:'cash', price:220,  tint:0x2A2C30},
-    {id:'sho_sangre', name:'Sangre',         tier:'cash', price:700,  tint:0x7A2020},
-    {id:'sho_campeon',name:'Campeón',        tier:'earned', tint:0x5A4A1F, need:{L:1},
-       why:'one habit line finished end to end'}
+    {id:'sho_asfalto',name:'Asfalto',        tier:'free',  tint:0x2A2C30},
+    {id:'sho_sangre', name:'Sangre',         tier:'free',  tint:0x7A2020},
+    {id:'sho_campeon', name:'Campeón', tier:'free', tint:0x5A4A1F}
   ]
 };
 /* ---- THE CUT -------------------------------------------------------------
@@ -1290,7 +1295,7 @@ const DRIP_FITS={
    Locking reuses fitLock()/buyFit() unchanged -- they read .tier/.price/.need
    and nothing else, so a cut and a colourway cannot drift apart on what a
    gate means. */
-const CUT_SLOTS=['top','bottom'];
+const CUT_SLOTS=['top','bottom','hair'];
 const DRIP_CUTS={
   top:[
     {id:'cut_hoodie',  name:'Hoodie',        tier:'free', part:'hoodie_top'},
@@ -1298,10 +1303,20 @@ const DRIP_CUTS={
     {id:'cut_franela', name:'Franela',       tier:'cash', price:240, part:'franela_top'}
   ],
   bottom:[
+    /* Both shorts are premade trousers hemmed to a real length — denim 2.5in
+       below the knee, gym 1.5in above it. See GARMENT_PARTS in models.js. */
     {id:'cut_denim',   name:'Denim shorts',  tier:'free', part:'denimshorts'},
     {id:'cut_gym',     name:'Gym shorts',    tier:'cash', price:200, part:'gymshorts'},
     {id:'cut_jeans',   name:'Jeans',         tier:'cash', price:300, part:'jeans'},
     {id:'cut_baggy',   name:'Baggy pants',   tier:'cash', price:420, part:'baggy'}
+  ],
+  hair:[
+    {id:'hair_c_stock', name:'Short curls',  tier:'free', part:'hair_stock'},
+    {id:'hair_c_waves', name:'Waves',        tier:'cash', price:150, part:'hair_waves'},
+    {id:'hair_c_fade',  name:'Side part',    tier:'cash', price:150, part:'hair_fade'},
+    {id:'hair_c_long',  name:'Long + beard', tier:'cash', price:260, part:'hair_long'},
+    {id:'hair_c_mohawk',name:'Mohawk',       tier:'earned', part:'hair_mohawk', need:{streak:14},
+       why:'a 14-day streak, ever'}
   ]
 };
 function cutEntry(slot,id){
