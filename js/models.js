@@ -1,3 +1,43 @@
+/* Recolours whatever is in a slot, without swapping any geometry. Works for
+   the cut slots (top/bottom/hair) and for the two that are never swapped —
+   `skin`, which lives on whichever body parts are currently worn, and
+   `shoes`, which is whatever is not skin inside the feet.
+
+   `hex` of null/undefined means "as it was", restored from the material's own
+   recorded baseHex rather than guessed. */
+const TINT_SLOTS=['skin','hair','top','bottom','shoes'];
+function tintSlot(host,slot,hex){
+  if(!host) return false;
+  let targets=[];
+  if(slot==='skin'){
+    host.traverse(o=>{ if(o.isMesh&&o.material&&/^(Skin|Skin_Darker)$/.test(o.material.name||''))
+      targets.push(o); });
+  } else {
+    targets=slotMeshes(host,slot);
+  }
+  if(!targets.length) return false;
+  // on a cut slot only the garment material takes the colour, not the skin it carries
+  const partId=host.userData.worn&&host.userData.worn[slot];
+  const def=partId?GARMENT_PARTS[partId]:null;
+  let touched=false;
+  targets.forEach(t=>t.traverse(o=>{
+    if(!o.isMesh||!o.material) return;
+    (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
+      if(!m||!m.name) return;
+      if(slot==='top'||slot==='bottom'){ if(def&&m.name!==def.mat) return;
+        if(!def&&CLOTH_MAT_SKIP.test(m.name)) return; }
+      if(slot==='hair'&&/^(Skin|Skin_Darker|Eye|Eyebrows)$/.test(m.name)) return;
+      if(m.userData.baseHex===undefined) m.userData.baseHex=m.color.getHex();
+      if(hex===undefined||hex===null){ m.color.setHex(m.userData.baseHex); m.userData.tinted=false; }
+      else { m.color.setHex(hex); m.userData.tinted=true; }
+      touched=true;
+    });
+  }));
+  return touched;
+}
+/* Kept as the name the wardrobe code already calls. */
+function tintCut(host,slot,hex){ return tintSlot(host,slot,hex); }
+
 /* ===================== MODEL ASSETS =====================
    Rigged CC0 characters (Quaternius "Ultimate Modular Men", CC0 1.0) plus a
    CC0 car, loaded at runtime. Everything here degrades gracefully: if an
@@ -738,23 +778,66 @@ function applyVRMFit(vrm,fit){
    so four of the seven cuts cost nothing extra; only the other three are
    their own (small, mesh-only, animation-free) download. */
 const GARMENT_PARTS={
-  hoodie_top:  {src:'hoodie', node:'Casual_Body',  mat:'Purple'},
-  tee_top:     {src:'casual', node:'Casual2_Body', mat:'LightBrown'},
-  franela_top: {file:'characters/parts/Beach_Body.glb',   node:'Beach_Body',   mat:'LightBrown'},
-  denimshorts: {src:'hoodie', node:'Casual_Legs',  mat:'LightBlue'},
-  jeans:       {src:'casual', node:'Casual2_Legs', mat:'LightBlue'},
-  gymshorts:   {file:'characters/parts/Beach_Legs.glb',   node:'Beach_Legs',   mat:'Red_Dark'},
-  baggy:       {file:'characters/parts/Farmer_Pants.glb', node:'Farmer_Pants', mat:'LightBlue'}
+  hoodie_top:  {slot:'top', src:'hoodie', node:'Casual_Body',  mat:'Purple'},
+  tee_top:     {slot:'top', src:'casual', node:'Casual2_Body', mat:'LightBrown'},
+  franela_top: {slot:'top', file:'characters/parts/Beach_Body.glb', node:'Beach_Body', mat:'LightBrown'},
+
+  /* The two shorts are the pack's own full-length trousers CUT TO LENGTH --
+     Casual_2's slim jeans hemmed 2.5in below the knee, the Farmer's baggy
+     pair 1.5in above it. The pack ships exactly two shorts and neither sits
+     where a real pair does, so the length comes from tailoring premade
+     geometry rather than from a mesh anyone modelled. Each carries the bare
+     leg it exposes (see assets/characters/parts/README.md). */
+  denimshorts: {slot:'bottom', file:'characters/parts/Shorts_Denim.glb', node:'Shorts_Denim', mat:'LightBlue'},
+  gymshorts:   {slot:'bottom', file:'characters/parts/Shorts_Gym.glb',   node:'Shorts_Gym',   mat:'LightBlue'},
+  jeans:       {slot:'bottom', src:'casual', node:'Casual2_Legs', mat:'LightBlue'},
+  baggy:       {slot:'bottom', file:'characters/parts/Farmer_Pants.glb', node:'Farmer_Pants', mat:'LightBlue'},
+
+  /* HAIR. A hairstyle is one mesh weighted to the Head bone alone, so it
+     swaps the same way a garment does -- but it is matched by MATERIAL, not
+     by node name: hair lives inside the character's own *_Head group next to
+     the face, eyes and brows, and only the hair mesh may be replaced. */
+  hair_stock:  {slot:'hair', src:'hoodie', node:'Casual_Head', mats:['Hair'], mat:'Hair'},
+  hair_waves:  {slot:'hair', file:'characters/parts/Hair_Waves.glb',  node:'Beach_Head',      mats:['Hair'], mat:'Hair'},
+  hair_fade:   {slot:'hair', file:'characters/parts/Hair_Fade.glb',   node:'Suit_Head',       mats:['Hair'], mat:'Hair'},
+  hair_long:   {slot:'hair', file:'characters/parts/Hair_Long.glb',   node:'Adventurer_Head', mats:['Hair'], mat:'Hair'},
+  hair_mohawk: {slot:'hair', file:'characters/parts/Hair_Mohawk.glb', node:'Punk_Head',       mats:['Red','Red_Dark'], mat:'Red'}
 };
 /* Which node names a character's own top/bottom already go by. Every model in
    the pack follows <Character>_Body / _Legs (the Farmer calls its bottom
    _Pants), so this matches the character you start in as well as anything
    worn over it. */
-const CUT_SLOT_RE={ top:/_Body$/, bottom:/_(Legs|Pants)$/ };
+const CUT_SLOT_RE={ top:/_Body$/, bottom:/_(Legs|Pants|Shorts)$/, hair:null };
 /* Material names that are the BODY, not the clothes — used when reading a
    garment's colour off a node whose `mat` we don't know (the character's own
    original top/bottom, before any cut has been worn). */
 const CLOTH_MAT_SKIP=/^(Skin|Skin_Darker|Eye|Eyebrows|Hair|Hair_White|Moustache)$/;
+const HAIR_MAT=/^(Hair|Hair_White)$/;
+/* What counts as "the thing currently in this slot" on a character. The top
+   and bottom are whole nodes; hair is a mesh identified by its material
+   inside the head, and shoes are whatever is not skin inside the feet. */
+function slotMeshes(host,slot){
+  const out=[];
+  if(slot==='hair'){
+    host.traverse(o=>{
+      if(!o.isMesh) return;
+      if(o.userData.cutSlot==='hair'){ out.push(o); return; }
+      if(o.material&&HAIR_MAT.test(o.material.name||'')&&o.parent&&/_Head$/.test(o.parent.name))
+        out.push(o);
+    });
+    return out;
+  }
+  if(slot==='shoes'){
+    host.traverse(o=>{ if(o.isMesh&&o.parent&&/_Feet$/.test(o.parent.name)
+      &&o.material&&!CLOTH_MAT_SKIP.test(o.material.name||'')) out.push(o); });
+    return out;
+  }
+  const re=CUT_SLOT_RE[slot];
+  host.traverse(o=>{
+    if(o.userData.cutSlot===slot||(re&&re.test(o.name)&&(o.isMesh||o.type==='Group'))) out.push(o);
+  });
+  return out;
+}
 
 /* Downloaded-once cache for the parts that aren't already in ASSETS.chars.
    A value of `null` means "tried and failed" — a missing garment leaves the
@@ -834,12 +917,8 @@ function wearCutNow(host,slot,partId,donorScene,tint){
      what stops outfits STACKING: a worn cut keeps its donor's node name
      (Beach_Body on a Casual character), so name-matching alone misses it on
      the next change and you end up wearing both. */
-  const re=CUT_SLOT_RE[slot];
   let arm=null;
-  const doomed=[];
-  host.traverse(o=>{
-    if(o.userData.cutSlot===slot||(re&&re.test(o.name)&&(o.isMesh||o.type==='Group'))) doomed.push(o);
-  });
+  const doomed=slotMeshes(host,slot);
   /* Inherit the colour the outgoing garment was wearing, unless the caller
      asked for a specific tint. Changing your CUT should not silently change
      your COLOUR back to whatever the donor file happened to export -- the
@@ -853,15 +932,25 @@ function wearCutNow(host,slot,partId,donorScene,tint){
     (Array.isArray(m.material)?m.material:[m.material]).forEach(mat=>{
       if(!mat||!mat.name||inheritMap[mat.name]!==undefined) return;
       inheritMap[mat.name]=mat.color.getHex();
-      if(inherited===null&&!CLOTH_MAT_SKIP.test(mat.name)) inherited=mat.color.getHex();
+      /* What counts as "the body" depends on the slot: Hair is part of the
+         body for a shirt, and is the garment itself for a hairstyle. */
+      const bodyRe=(slot==='hair')?/^(Skin|Skin_Darker|Eye|Eyebrows)$/:CLOTH_MAT_SKIP;
+      if(inherited===null&&!bodyRe.test(mat.name)) inherited=mat.color.getHex();
     });
   }));
   doomed.forEach(o=>{ if(!arm) arm=o.parent; if(o.parent) o.parent.remove(o); });
   if(!arm) host.traverse(o=>{ if(!arm&&o.name==='CharacterArmature') arm=o; });
   if(!arm) arm=host;
 
+  /* For hair, only the hair MESHES travel -- the donor's head brings a face,
+     eyes and brows with it, and swapping a hairstyle must not swap the head. */
+  const wanted=[];
   node.traverse(o=>{
     if(!o.isSkinnedMesh) return;
+    if(def.mats&&def.mats.indexOf(o.material&&o.material.name)<0) return;
+    wanted.push(o);
+  });
+  wanted.forEach(o=>{
     bindGarment(o,donorSkel,hostSkel,partId+'|'+o.name);
     o.userData.sharedGeo=true;             // geometry is GARMENT_GEO's, not this clone's
     o.material=Array.isArray(o.material)?o.material.map(m=>m.clone()):o.material.clone();
@@ -888,9 +977,18 @@ function wearCutNow(host,slot,partId,donorScene,tint){
        posed mesh is not, which culls a worn garment at some camera angles and
        not others. */
     o.frustumCulled=false;
+    o.userData.cutSlot=slot;
   });
-  node.userData.cutSlot=slot;
-  arm.add(node);
+  if(!wanted.length) return false;
+  if(def.slot==='hair'){
+    /* Hair hangs off the character's OWN head, not the donor's node, so it
+       follows the head bone and the head the player is actually wearing. */
+    let head=null; host.traverse(o=>{ if(!head&&/_Head$/.test(o.name)) head=o; });
+    (head||arm).add.apply(head||arm, wanted);
+  } else {
+    node.userData.cutSlot=slot;
+    arm.add(node);
+  }
   return true;
 }
 
@@ -902,14 +1000,19 @@ function applyCuts(host,fit,done){
   const tints=(fit&&fit.tint)||{};
   host.userData.worn=host.userData.worn||{};
   let pending=CUT_SLOTS.length, changed=false;
-  const finish=()=>{ if(--pending<=0) done&&done(changed); };
+  const finish=()=>{ if(--pending>0) return;
+    /* Again after the garments have actually landed: a newly worn top brings
+       its own skin with it, and a swap that resolves late would otherwise
+       leave that skin at the donor's tone until the next repaint. */
+    ['skin','shoes'].forEach(slot=>{ tintSlot(host,slot,tints[slot]); });
+    done&&done(changed); };
   CUT_SLOTS.forEach(slot=>{
     const cut=(typeof currentCut==='function')?currentCut(slot):null;
     if(!cut||!cut.part){ finish(); return; }
     /* Already wearing it -> re-tint in place and stop. The preview calls this
        on every slider input, and a full re-wear clones a 62-bone rig each
        time; only an actual CHANGE of cut is worth that. */
-    if(host.userData.worn[slot]===cut.part){ tintCut(host,slot,tints[slot]); finish(); return; }
+    if(host.userData.worn[slot]===cut.part){ tintSlot(host,slot,tints[slot]); finish(); return; }
     loadGarment(cut.part,scene=>{
       if(scene&&wearCutNow(host,slot,cut.part,scene,tints[slot])){
         host.userData.worn[slot]=cut.part; changed=true;
@@ -917,6 +1020,10 @@ function applyCuts(host,fit,done){
       finish();
     });
   });
+  /* The slots that are never swapped, only coloured. Run after the cut slots
+     are requested but independently of them: skin lives on whatever body
+     parts are worn right now, so it is re-applied on every pass. */
+  ['skin','shoes'].forEach(slot=>{ tintSlot(host,slot,tints[slot]); });
 }
 
 /* Recolours the garment already on the body, without swapping any geometry.

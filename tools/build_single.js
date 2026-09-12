@@ -95,7 +95,8 @@ sub(`    gl.load(ASSET_BASE+CHAR_MODELS[n],
    refuses. Only the three file-backed cuts need this -- the other four are
    parts of the two character GLBs already inlined. */
 const partB64 = {};
-for (const f of ['Beach_Body.glb','Beach_Legs.glb','Farmer_Pants.glb'])
+for (const f of ['Beach_Body.glb','Farmer_Pants.glb','Shorts_Denim.glb','Shorts_Gym.glb',
+                 'Hair_Waves.glb','Hair_Fade.glb','Hair_Long.glb','Hair_Mohawk.glb'])
   partB64['characters/parts/'+f] = rawB64('assets/characters/parts/'+f);
 sub(`  new THREE.GLTFLoader().load(ASSET_BASE+def.file,
     g=>{ GARMENT_CACHE[partId]=g.scene; done(g.scene); },

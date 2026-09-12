@@ -1,0 +1,154 @@
+<!-- tools/extract_parts.html — how the files in assets/characters/parts/ were made.
+
+     NOT part of the game and never loaded by it. This is the one-off tool that
+     pulls a garment or a hairstyle out of a Quaternius "Ultimate Modular Men"
+     glTF and writes a small, animation-free .glb of just that part, optionally
+     hemmed to a length.
+
+     To run it again:
+       1. Download the pack's Individual Characters > glTF folder from
+          https://quaternius.com/packs/ultimatemodularcharacters.html
+          and drop the .gltf files beside this page.
+       2. Vendor three.js's GLTFExporter and its TextureUtils dependency into
+          ./exporters/ and ./utils/ (they are examples/jsm, not in js/vendor/).
+       3. Serve the repo and drive this page with Playwright, calling
+          tailor({src, node, groupName, cutY, cutMat, keepMat, skinFrom,
+          legInset}) once per part and writing the returned base64 to a file.
+
+     Everything it produces is CC0 geometry from that pack; nothing here
+     models anything. See assets/characters/parts/README.md for what each
+     argument is for and what goes wrong without it. -->
+<!doctype html><meta charset=utf-8><body>
+<script type="importmap">{"imports":{"three":"/js/vendor/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from '/js/vendor/jsm/loaders/GLTFLoader.js';
+import {GLTFExporter} from '/.tmp_extract/exporters/GLTFExporter.js';
+window.THREE=THREE;
+const load=url=>new Promise((res,rej)=>new GLTFLoader().load(url,res,undefined,rej));
+
+/* Cut a garment to length. Triangles wholly below `cutY` (BIND pose) are
+   dropped; a triangle straddling the line is kept with its low vertices
+   clamped up to the line, which leaves a flat hem instead of a ragged one. */
+function hemTo(mesh,cutY){
+  const g=mesh.geometry.index?mesh.geometry.toNonIndexed():mesh.geometry;
+  const pos=g.attributes.position;
+  const keep=[];
+  for(let t=0;t<pos.count;t+=3){
+    const ys=[pos.getY(t),pos.getY(t+1),pos.getY(t+2)];
+    if(ys[0]<cutY&&ys[1]<cutY&&ys[2]<cutY) continue;   // wholly below the hem
+    keep.push(t);
+  }
+  const attrs={}, names=Object.keys(g.attributes);
+  names.forEach(n=>{ const a=g.attributes[n];
+    attrs[n]={itemSize:a.itemSize, arr:new a.array.constructor(keep.length*3*a.itemSize),
+              norm:a.normalized, Ctor:a.array.constructor}; });
+  keep.forEach((t,i)=>{ for(let k=0;k<3;k++){
+    names.forEach(n=>{ const a=g.attributes[n], d=attrs[n];
+      for(let c=0;c<a.itemSize;c++) d.arr[(i*3+k)*a.itemSize+c]=a.getComponent(t+k,c);
+    });
+    const yi=(i*3+k)*3+1;
+    if(attrs.position.arr[yi]<cutY) attrs.position.arr[yi]=cutY;   // clamp to the hem
+  }});
+  const out=new THREE.BufferGeometry();
+  names.forEach(n=>out.setAttribute(n,new THREE.BufferAttribute(attrs[n].arr,attrs[n].itemSize,attrs[n].norm)));
+  mesh.geometry=out;
+  return {kept:keep.length, of:pos.count/3};
+}
+
+window.tailor = async (job)=>{
+  const g=await load(job.src);
+  const scene=g.scene;
+  // pull in an extra mesh from another file (the bare-leg skin), if asked
+  let extra=null;
+  if(job.skinFrom){
+    const s2=await load(job.skinFrom.url);
+    const under=new RegExp(job.skinFrom.under);
+    s2.scene.traverse(o=>{ if(!extra&&o.isSkinnedMesh&&o.material.name===job.skinFrom.mat
+      && o.parent && under.test(o.parent.name)) extra=o; });
+  }
+  const report=[];
+  let host=null; scene.traverse(o=>{ if(!host&&o.name===job.node) host=o; });
+  if(!host) throw new Error('node not found: '+job.node);
+  if(job.cutY!=null){
+    host.traverse(o=>{ if(o.isSkinnedMesh&&(!job.cutMat||o.material.name===job.cutMat))
+      report.push(o.material.name+' '+JSON.stringify(hemTo(o,job.cutY))); });
+  }
+  if(extra){
+    // re-home the donated skin onto THIS file's skeleton by bone name
+    let hs=null; host.traverse(o=>{ if(!hs&&o.isSkinnedMesh) hs=o; });
+    const map=new Int32Array(extra.skeleton.bones.length);
+    extra.skeleton.bones.forEach((bn,i)=>{ map[i]=hs.skeleton.bones.findIndex(h=>h.name===bn.name); });
+    const geo=extra.geometry.clone(), si=geo.attributes.skinIndex, arr=si.array.slice();
+    for(let i=0;i<arr.length;i++){ const m=map[arr[i]]; arr[i]=m<0?0:m; }
+    geo.setAttribute('skinIndex',new THREE.BufferAttribute(arr,4));
+    /* Pull the bare leg INSIDE the trouser. A slim-cut leg (Casual_2's jeans)
+       sits within a hair of the bare leg it is grafted onto, and two almost
+       coincident surfaces z-fight -- which renders as torn holes across the
+       thigh, not as a subtle artifact. Each vertex is drawn toward its own
+       leg's vertical axis (split by the sign of x, axis taken from that
+       side's own centroid) so the leg shortens nowhere and only narrows. */
+    if(job.legInset){
+      const P=geo.attributes.position;
+      const c={}; [1,-1].forEach(sg=>{ let sx=0,sz=0,n=0;
+        for(let i=0;i<P.count;i++){ const x=P.getX(i); if(Math.sign(x)!==sg) continue;
+          sx+=x; sz+=P.getZ(i); n++; }
+        c[sg]=n?{x:sx/n,z:sz/n}:{x:0,z:0}; });
+      /* Only the HIDDEN part narrows. The leg below the hem is what you
+         actually see, and shrinking that reads as spindly calves -- so the
+         inset is full strength above the hem, ramps off across a short band,
+         and is 1.0 (untouched) everywhere the trouser does not cover. */
+      const k=job.legInset, hem=job.cutY, band=0.06;
+      for(let i=0;i<P.count;i++){
+        const x=P.getX(i), y=P.getY(i), a=c[Math.sign(x)||1];
+        const t=Math.max(0,Math.min(1,(y-(hem-band))/band));   // 0 below, 1 above
+        const f=1+(k-1)*t;
+        P.setX(i, a.x+(x-a.x)*f);
+        P.setZ(i, a.z+(P.getZ(i)-a.z)*f);
+      }
+      P.needsUpdate=true;
+      report.push('leg inset '+k);
+    }
+    const m=new THREE.SkinnedMesh(geo, extra.material.clone());
+    m.name='BareLegs'; m.bind(hs.skeleton, hs.bindMatrix);
+    /* One GROUP holding the cut garment AND the leg it exposes. The pair is
+       indivisible: cutting a trouser leg off reveals a shin that the trouser
+       mesh was the only thing covering, and a wardrobe slot swaps one node. */
+    const grp=new THREE.Group(); grp.name=job.groupName||job.node;
+    const parent=host.parent; parent.add(grp);
+    grp.add(host); grp.add(m);
+    host=grp;
+    report.push('bare-leg skin grafted, '+extra.skeleton.bones.length+' bones remapped');
+  }
+  // drop everything except the node we want
+  const drop=[]; scene.traverse(o=>{
+    if(o.isMesh && o!==host && o.parent!==host && !(host.isMesh) ) {
+      let p=o, inside=false; while(p){ if(p===host){inside=true;break;} p=p.parent; }
+      if(!inside) drop.push(o);
+    } else if(o.isMesh && host.isMesh && o!==host && o.name!=='BareLegs') drop.push(o);
+  });
+  drop.forEach(o=>o.parent&&o.parent.remove(o));
+  if(job.keepMat){
+    const d2=[]; scene.traverse(o=>{ if(o.isMesh&&job.keepMat.indexOf(o.material.name)<0&&o.name!=='BareLegs') d2.push(o); });
+    d2.forEach(o=>o.parent&&o.parent.remove(o));
+  }
+  let n=0; scene.traverse(o=>{ if(o.isMesh) n++; });
+  const buf=await new Promise((res,rej)=>new GLTFExporter().parse(scene,res,rej,
+    {binary:true,animations:[],onlyVisible:false}));
+  const u=new Uint8Array(buf); let s=''; const CH=0x8000;
+  for(let i=0;i<u.length;i+=CH) s+=String.fromCharCode.apply(null,u.subarray(i,i+CH));
+  return {b64:btoa(s), meshes:n, report};
+};
+window.__ready=1;
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from '/js/vendor/jsm/loaders/GLTFLoader.js';
+window.tree = (url)=>new Promise((res,rej)=>{ new GLTFLoader().load(url,g=>{
+  const l=[]; g.scene.traverse(o=>{ let d=0,p=o; while(p.parent){d++;p=p.parent;}
+    if(o.isBone) return;
+    l.push('  '.repeat(d)+o.type+' "'+o.name+'"'+(o.isMesh?' mat='+o.material.name+
+      ' v='+o.geometry.attributes.position.count+(o.isSkinnedMesh?' SKINNED bones='+o.skeleton.bones.length:' PLAIN'):''));
+  }); res(l.join('\n')); },undefined,rej); });
+window.__ready2=1;
+</script>

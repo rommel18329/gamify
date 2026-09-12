@@ -631,23 +631,31 @@ function repaintFitRows(){
     const ck=el.querySelector('.ck'); if(ck) ck.textContent=sel?'\u2713':'';
     const c=el.querySelector('.cue'); if(c) c.textContent=cue;
   };
+  /* Colour presets are swatch chips, not list rows: selection is `.sel`, and
+     there is no tick or cue line to patch. */
   document.querySelectorAll('#sheetBody [data-fit]').forEach(el=>{
     const [slot,id]=el.getAttribute('data-fit').split(':');
     const f=(typeof fitEntry==='function')&&fitEntry(slot,id); if(!f) return;
-    const lock=fitLock(f);
-    const cur=(fit.tint&&fit.tint[slot]!==undefined)?fit.tint[slot]:null;
-    const sel=(f.tint==null&&cur===null)||(f.tint!=null&&cur===f.tint);
-    paint(el,sel,!lock.ok, lock.ok
-      ? (f.tier==='earned'?'Earned — '+f.why:f.tier==='cash'?'Owned':'Comes with the character')
-      : (f.tier==='earned'?'Locked — '+lock.why:'Tap to buy — '+lock.why));
+    const cur=(fit.tint&&fit.tint[slot]!==undefined&&fit.tint[slot]!==null)
+      ? fit.tint[slot] : null;
+    el.classList.toggle('sel',(f.tint==null&&cur===null)||(f.tint!=null&&cur===f.tint));
+  });
+  /* The picker shows the live value, so tapping a preset moves the wheel too
+     and the two controls can never disagree about what colour a slot is. */
+  document.querySelectorAll('#sheetBody [data-tint]').forEach(el=>{
+    const slot=el.getAttribute('data-tint');
+    const cur=(fit.tint&&fit.tint[slot]!==undefined&&fit.tint[slot]!==null)
+      ? fit.tint[slot] : null;
+    if(cur!==null) el.value='#'+cur.toString(16).padStart(6,'0');
   });
   document.querySelectorAll('#sheetBody [data-cut]').forEach(el=>{
     const [slot,id]=el.getAttribute('data-cut').split(':');
     const c=(typeof cutEntry==='function')&&cutEntry(slot,id); if(!c) return;
     const lock=fitLock(c), worn=currentCut(slot);
     paint(el,!!(worn&&worn.id===c.id),!lock.ok,
-      lock.ok?(c.tier==='free'?'Comes with the character':'Owned')
-             :'Tap to buy — '+lock.why);
+      lock.ok?(c.tier==='free'?'Comes with the character'
+               :c.tier==='earned'?'Earned — '+c.why:'Owned')
+             :(c.tier==='earned'?'Locked — '+lock.why:'Tap to buy — '+lock.why));
   });
 }
 
@@ -783,14 +791,16 @@ function openCharacter(){
          a part of the same CC0 Quaternius rig the character is (see
          GARMENT_PARTS in models.js). Only the GLB character can wear them. */
       if(!isVRM&&typeof DRIP_CUTS!=='undefined'){
+        const CUT_LABEL={top:'TOP',bottom:'BOTTOM',hair:'HAIR'};
         CUT_SLOTS.forEach(slot=>{
-          html+='<div class="tkh">'+{top:'TOP — CUT',bottom:'BOTTOM — CUT'}[slot]+'</div>';
+          html+='<div class="tkh">'+CUT_LABEL[slot]+'</div>';
           const worn=currentCut(slot);
           (DRIP_CUTS[slot]||[]).forEach(c=>{
             const lock=fitLock(c), sel=worn&&worn.id===c.id;
             const cue = lock.ok
-              ? (c.tier==='free'?'Comes with the character':'Owned')
-              : 'Tap to buy — '+lock.why;
+              ? (c.tier==='free'?'Comes with the character'
+                 :c.tier==='earned'?'Earned — '+c.why:'Owned')
+              : (c.tier==='earned'?'Locked — '+lock.why:'Tap to buy — '+lock.why);
             html+='<div class="row'+(sel?' done':'')+(lock.ok?'':' lk')+'" '+
               'data-cut="'+slot+':'+c.id+'">'+
               '<div class="ck">'+(sel?'✓':'')+'</div>'+
@@ -798,27 +808,29 @@ function openCharacter(){
           });
         });
       }
+      /* COLOUR. One free picker per slot, plus the named presets as one-tap
+         shortcuts. The picker is exactly why those presets are free now: a
+         gate you can walk around with a colour wheel is not a gate, so the
+         DRIP prices moved onto the CUTS, where a shape is a real unlock. */
+      html+='<div class="tkh">COLOUR</div>';
+      const CLAB={skin:'SKIN',hair:'HAIR',top:'TOP',bottom:'BOTTOM',shoes:'SHOES'};
       FIT_SLOTS.forEach(slot=>{
-        if(!isVRM&&(slot==='hair'||slot==='shoes')) return;   // no cut/slot for these yet
-        const label={hair:'HAIR',top:'TOP — COLOUR',bottom:'BOTTOM — COLOUR',
-                     shoes:'SHOES'}[slot];
-        html+='<div class="tkh">'+label+'</div>';
+        if(isVRM&&slot==='skin') return;      // a VRM's skin lives in its texture
+        const cur=(fit.tint&&fit.tint[slot]!==undefined&&fit.tint[slot]!==null)
+          ? fit.tint[slot] : null;
+        const hx='#'+((cur===null?0x9A7B5A:cur).toString(16).padStart(6,'0'));
+        let sws='';
         (DRIP_FITS[slot]||[]).forEach(f=>{
-          const lock=fitLock(f);
-          const cur=(fit.tint&&fit.tint[slot]!==undefined?fit.tint[slot]:null);
           const sel=(f.tint==null&&cur===null)||(f.tint!=null&&cur===f.tint);
-          const sw=f.tint==null?'':'<span style="display:inline-block;width:.85em;height:.85em;'+
-            'border-radius:3px;vertical-align:-1px;margin-right:.45em;background:#'+
-            f.tint.toString(16).padStart(6,'0')+'"></span>';
-          const cue = lock.ok
-            ? (f.tier==='earned'?'Earned — '+f.why
-               : f.tier==='cash'?'Owned' : 'Comes with the character')
-            : (f.tier==='earned'?'Locked — '+lock.why : 'Tap to buy — '+lock.why);
-          html+='<div class="row'+(sel?' done':'')+(lock.ok?'':' lk')+'" '+
-            'data-fit="'+slot+':'+f.id+'">'+
-            '<div class="ck">'+(sel?'✓':'')+'</div>'+
-            '<div class="nm">'+sw+f.name+'<span class="cue">'+cue+'</span></div></div>';
+          const bg=f.tint==null
+            ? 'repeating-linear-gradient(45deg,#4A5058 0 4px,#6B727C 4px 8px)'
+            : '#'+f.tint.toString(16).padStart(6,'0');
+          sws+='<span class="sw'+(sel?' sel':'')+'" title="'+f.name+'" '+
+               'data-fit="'+slot+':'+f.id+'" style="background:'+bg+'"></span>';
         });
+        html+='<div class="crow"><span class="clab">'+CLAB[slot]+'</span>'+
+          '<input type="color" data-tint="'+slot+'" value="'+hx+'">'+
+          '<span class="sws">'+sws+'</span></div>';
       });
     }
   }
@@ -865,6 +877,24 @@ function openCharacter(){
       save(); repaintFitRows(); refreshCharPreview();
     });
   });
+  /* The colour wheel. `input` rather than `change` so the character recolours
+     under the finger while the picker is open, and save() only on release —
+     save() serialises the whole of S to localStorage and an iOS colour wheel
+     fires continuously while you drag. */
+  document.querySelectorAll('#sheetBody [data-tint]').forEach(el=>{
+    const slot=el.getAttribute('data-tint');
+    const apply=()=>{
+      const c=S.person.character;
+      c.fit=c.fit||{hide:{},tint:{},cut:{}}; c.fit.tint=c.fit.tint||{};
+      c.fit.tint[slot]=parseInt(el.value.replace('#',''),16);
+      document.querySelectorAll('#sheetBody [data-fit^="'+slot+':"]')
+        .forEach(sw=>sw.classList.remove('sel'));
+      refreshCharPreview();
+    };
+    el.addEventListener('input',apply);
+    ['change','blur'].forEach(ev=>el.addEventListener(ev,()=>{apply();save();}));
+  });
+
   /* Cut rows. Same shape as the colour rows above, and deliberately the same
      lock/buy path (fitLock/buyFit read .tier/.price/.need and nothing else),
      so a cut and a colourway cannot disagree about what a gate means. */
