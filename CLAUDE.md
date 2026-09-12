@@ -845,7 +845,16 @@ unbroken side outline (cowl → screen rake → roof → hatch fall), so the out
 is defined once as a `THREE.Shape` and swept across the width with
 `ExtrudeGeometry`. Two consequences worth knowing:
 
-- `ExtrudeGeometry` builds in local XY and sweeps along local +Z, so the mesh
+- **There are TWO sweeps, split at the beltline**, because a car's cabin is
+  glass and its lower body is steel — one solid sweep from sill to roof cannot
+  be both. The first version extruded the whole outline in paint and stuck
+  small glass rectangles on the flank: the greenhouse came out as a solid
+  painted block with the windows half-buried in it, because there were no
+  window openings to put them in. The cabin is now its own, slightly
+  **narrower** sweep in glass, inset from the body sides the way real glass
+  sits inside its frame, with painted A/B/C pillars, roof rails and a roof cap
+  laid over it.
+- `ExtrudeGeometry` builds in local XY and sweeps along local +Z, so each mesh
   is rotated `-Math.PI/2` about Y to put the profile nose-to-tail along world
   Z and the sweep across world X. Nose stays along **+Z** like every other
   representation of this car (the cannon.js chassis `Box`, the collider), so
@@ -855,9 +864,10 @@ is defined once as a `THREE.Shape` and swept across the width with
   of the outline lifts over each wheel. An earlier version drew them as black
   boxes on the flank and the car looked like it was hovering above four loose
   tyres.
-- **Glass panes ride the same vertices the profile uses.** They were left on
-  pre-arch coordinates once and the hatch glass sat a third of its own length
-  short of the glass line.
+- **The pillars are laid along the same edges the cabin profile defines**, so
+  they cannot drift out of line with the glass. An earlier set of loose panes
+  was left on pre-arch coordinates and the hatch glass sat a third of its own
+  length short of the glass line.
 
 The proportions are the real car's, not taste: 4.18 m long, 1.70 wide, 1.36
 tall on a 2.62 m wheelbase — against this world's fixed 4-unit person that is
@@ -913,6 +923,13 @@ read badly for a specific, diagnosable reason:
 - **Street signs** carry a drop shadow on the lettering, a bracket, bolts and
   a PARE plate below. A solid backer plate was tried behind the lettering and
   removed: it rendered over the text and both signs came out blank.
+- **Every overhead wire goes from something to something.** `wireSpan(a,b,sag)`
+  draws a real sagging line between two anchor points, and the streetlight
+  bundles now span pole to pole while the power-pole service drops loop down
+  to the transformer can on their own pole. Both were previously straight
+  `BoxGeometry` stubs pointing off into open air, and they read exactly like
+  what they were: lengths of pipe floating beside the street with nothing on
+  the far end. If there is no second anchor, don't draw a wire.
 
 All the small repeated pieces here (fronds, shards, wires, bars, ribs) pass
 `{ink:false}` — an outline on each of a few dozen adjacent slivers reads as

@@ -284,6 +284,24 @@ function frondArc(len,wid,col,segs,droop){
   }
   return root;
 }
+/* A wire that actually SPANS between two real anchor points, sagging in the
+   middle. Every overhead line in this world has to go from something to
+   something: an earlier version drew the drop bundles as straight box stubs
+   sticking out of each pole into open air, and they read exactly like what
+   they were -- lengths of pipe floating beside the street with nothing on the
+   far end. If there is no second anchor, there is no wire. */
+function wireSpan(a,b,sag,col){
+  const pts=[];
+  for(let i=0;i<=10;i++){
+    const t=i/10;
+    pts.push(new THREE.Vector3(
+      a.x+(b.x-a.x)*t,
+      a.y+(b.y-a.y)*t-Math.sin(t*Math.PI)*sag,
+      a.z+(b.z-a.z)*t));
+  }
+  return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({color:col===undefined?(nightMode?0x0A0C10:0x1A1A1A):col}));
+}
 function torsoGeo(shoulder,waist,len){
   const pts=[];
   [[waist*.92,0],[waist,.16],[waist*1.02,.36],[shoulder*.90,.62],[shoulder,.82],[shoulder*.86,.96],[shoulder*.5,1.0]]
@@ -431,51 +449,72 @@ function makeCar(veh){
      bumper step, the headlight shoulder, the cowl where the screen starts, the
      top of the A-pillar, the back of the roof, and the two-stage fall of the
      hatch down to the tail lamps. */
-  /* The outline as one closed loop: nose -> hood -> screen -> roof -> hatch ->
-     tail down the top, then back along the bottom with the sill LIFTING over
-     each wheel. Putting the arches in the profile is what seats the wheels in
-     the body -- an earlier version drew them as black boxes stuck on the flank
-     and the car looked like it was hovering above four loose tyres. The hatch
-     also falls steeply to a near-vertical tail: a gradual taper there reads as
-     a notchback saloon, which is the wrong car entirely. */
-  const prof=[
-    [ 2.35,.34],[ 2.35,.66],[ 2.20,.82],[ 1.62,.90],[ 1.02,.96],
-    [ 0.34,1.45],[-0.98,1.45],[-2.04,1.00],[-2.28,.74],[-2.33,.56],[-2.33,.34],
+  /* TWO extrusions, split at the beltline, because a car's cabin is GLASS and
+     its lower body is steel -- one solid sweep from sill to roof cannot be
+     both. The first version extruded the whole side outline in paint and then
+     stuck small glass rectangles on the flank: the greenhouse came out as a
+     solid painted block with the windows half-buried in it, and there were no
+     window openings anywhere because there was no opening to put them in.
+
+     Lower body carries the beltline, the arches and the bumpers. The cabin is
+     a separate, slightly NARROWER sweep in glass, so it sits inset from the
+     body sides the way real glass sits inside its frame, with painted pillars
+     and a roof cap laid over it. */
+  const belt=.96;
+  const lower=[
+    [ 2.35,.34],[ 2.35,.66],[ 2.20,.82],[ 1.62,.90],[ 1.02,belt],
+    [-1.95,belt],[-2.22,.88],[-2.33,.62],[-2.33,.34],
     [-2.02,.34],[-1.86,.66],[-1.44,.76],[-1.02,.66],[-0.86,.36],
     [ 0.86,.36],[ 1.02,.66],[ 1.44,.76],[ 1.86,.66],[ 2.02,.34]
   ];
-  const shape=new THREE.Shape();
-  shape.moveTo(prof[0][0],prof[0][1]);
-  for(let i=1;i<prof.length;i++) shape.lineTo(prof[i][0],prof[i][1]);
-  shape.lineTo(prof[0][0],prof[0][1]);
-  const bodyGeo=new THREE.ExtrudeGeometry(shape,{depth:W,bevelEnabled:false});
-  /* ExtrudeGeometry builds in local XY and sweeps along local +Z. Rotating
-     -90 degrees about Y maps local X onto world Z (the car's length) and local
-     Z onto world -X (its width), so the profile ends up running nose-to-tail
-     and the sweep runs across the car. */
-  const body=M(bodyGeo,paint,{inkT:.022});
-  body.rotation.y=-Math.PI/2; body.position.set(W/2,lo,0); g.add(body);
+  /* The cabin: cowl -> top of the screen -> back of the roof -> foot of the
+     hatch, closing along the beltline. The screen rake and the hatch fall are
+     the two angles that say which car this is. */
+  const cabin=[[1.02,belt],[0.34,1.45],[-0.98,1.45],[-1.95,belt]];
 
-  /* Glass sits just proud of the body surface on the same angles the profile
-     already established, so it can never drift out of line with the shell. */
-  const pane=(x1,y1,x2,y2,w,col)=>{
-    const dz=x2-x1, dy=y2-y1, len=Math.hypot(dz,dy);
-    const m=M(new THREE.BoxGeometry(w,len,.05),col,{inkT:.026,rimPow:1.5,rim:0xBBDDFF});
-    m.position.set(0,(y1+y2)/2+lo,(x1+x2)/2);
+  const sweep=(pts,w,col,inkT)=>{
+    const sh=new THREE.Shape();
+    sh.moveTo(pts[0][0],pts[0][1]);
+    for(let i=1;i<pts.length;i++) sh.lineTo(pts[i][0],pts[i][1]);
+    sh.lineTo(pts[0][0],pts[0][1]);
+    const m=M(new THREE.ExtrudeGeometry(sh,{depth:w,bevelEnabled:false}),col,
+      inkT===null?{ink:false}:{inkT:inkT});
+    /* ExtrudeGeometry builds in local XY and sweeps along local +Z. Rotating
+       -90 degrees about Y puts the profile nose-to-tail along world Z and the
+       sweep across world X, so the nose still points +Z like the cannon.js
+       chassis and the collider -- no rotation offset anywhere. */
+    m.rotation.y=-Math.PI/2; m.position.set(w/2,lo,0);
+    return m;
+  };
+
+  g.add(sweep(lower,W,paint,.022));
+  const GW=W-.12;                       // cabin inset from the body sides
+  const cab=sweep(cabin,GW,glass,null);
+  cab.position.x=GW/2; g.add(cab);
+
+  const roof=M(new THREE.BoxGeometry(W-.06,.09,1.34),paint,{inkT:.022});
+  roof.position.set(0,1.46+lo,-.32); g.add(roof);
+
+  /* Pillars laid over the glass along the same edges the cabin profile already
+     defines, so they can never drift out of line with it. */
+  const pillar=(z1,y1,z2,y2,wd)=>{
+    const dz=z2-z1, dy=y2-y1;
+    const m=M(new THREE.BoxGeometry(wd,Math.hypot(dz,dy),.09),paint,{ink:false});
     m.rotation.x=Math.atan2(dz,dy);
     return m;
   };
-  g.add(pane(1.02,.96,0.34,1.45,W-.16,glass));      // windscreen
-  g.add(pane(-0.98,1.45,-2.04,1.00,W-.18,glass));   // hatch glass
   [1,-1].forEach(sx=>{
-    const door=M(new THREE.BoxGeometry(.05,.38,1.00),glass,{ink:false});
-    door.position.set(sx*(W/2+.005),1.14+lo,.24); g.add(door);
-    const qtr=M(new THREE.BoxGeometry(.05,.30,.46),glass,{ink:false});
-    qtr.position.set(sx*(W/2+.005),1.14+lo,-.62); g.add(qtr);
-    const pil=M(new THREE.BoxGeometry(.06,.46,.09),paint,{ink:false});
-    pil.position.set(sx*(W/2+.01),1.16+lo,-.28); g.add(pil);
+    const px=sx*(W/2-.045);
+    const A=pillar(1.02,belt,0.34,1.45,.10);
+    A.position.set(px,(belt+1.45)/2+lo,(1.02+0.34)/2); g.add(A);
+    const C=pillar(-0.98,1.45,-1.95,belt,.10);
+    C.position.set(px,(belt+1.45)/2+lo,(-0.98-1.95)/2); g.add(C);
+    const B=M(new THREE.BoxGeometry(.10,.50,.13),paint,{ink:false});
+    B.position.set(px,belt+.25+lo,-.34); g.add(B);
+    const rail=M(new THREE.BoxGeometry(.09,.07,1.34),paint,{ink:false});
+    rail.position.set(px,1.44+lo,-.32); g.add(rail);
     const mir=M(new THREE.BoxGeometry(.16,.09,.11),paint,{ink:false});
-    mir.position.set(sx*(W/2+.10),1.00+lo,.76); g.add(mir);
+    mir.position.set(sx*(W/2+.10),belt+.06+lo,.86); g.add(mir);
     const skirt=M(new THREE.BoxGeometry(.08,.13,1.70),0x1D2026,{ink:false});
     skirt.position.set(sx*(W/2+.01),.40+lo,0); g.add(skirt);
   });
@@ -1121,6 +1160,7 @@ function buildStreetLights(colPos){
   const lightPosts=[[colPos.x-6,colPos.z+4],[colPos.x+6,colPos.z+4],
                     [colPos.x-6,colPos.z+13],[colPos.x+6,colPos.z+13]];
   const lensM=new THREE.MeshBasicMaterial({color:0xFFE9A0});
+  const anchors=[];
   lightPosts.forEach(([x,z],i)=>{
     const g=new THREE.Group(); const h=5.4;
     const face=(x<colPos.x)?1:-1;              // lamp arm points at the street
@@ -1136,15 +1176,27 @@ function buildStreetLights(colPos){
     head.position.set(.62*face,h-1.1,0); g.add(head);
     const lens=new THREE.Mesh(new THREE.CylinderGeometry(.18,.12,.05,10),lensM);
     lens.position.set(.62*face,h-1.24,0); g.add(lens);
-    // drop lines running off toward the next pole
-    for(let k=0;k<6;k++){
-      const w=M(new THREE.BoxGeometry(.035,.035,3.6),0x2B2B2B,{ink:false});
-      w.position.set(-.55+k*.22,h-.42-((k%3)*.12),-1.7); w.rotation.x=.05; g.add(w);
-    }
     if(nightMode){ const pl=new THREE.PointLight(0xFFD98A,.55,9);
       pl.position.set(x+.62*face,h-1.3,z); scene.add(pl); }
     g.position.set(x,0,z); g.rotation.y=(i<2?0:Math.PI);
     scene.add(g);
+    anchors.push({x:x,z:z,y:h-.34});      // the insulator height on this pole
+  });
+
+  /* The drop bundle, now spanning pole to pole down each side of the street
+     instead of ending in mid-air. Four conductors at slightly different
+     heights and sags, so the bundle reads as a tangle rather than as one
+     ruled line. */
+  [[0,2],[1,3]].forEach(pair=>{
+    const A=anchors[pair[0]], B=anchors[pair[1]];
+    if(!A||!B) return;
+    for(let k=0;k<4;k++){
+      const off=(k-1.5)*.13, drop=(k%2)*.16;
+      scene.add(wireSpan(
+        new THREE.Vector3(A.x+off,A.y-drop,A.z),
+        new THREE.Vector3(B.x+off,B.y-drop,B.z),
+        .55+k*.09));
+    }
   });
   // the strung bulb line between the two street-side poles stays: it is what
   // actually lights the domino table at night
@@ -1252,20 +1304,25 @@ function buildPowerLines(){
       const lid=M(new THREE.CylinderGeometry(.33,.33,.09,12),nightMode?0x46433B:0x6B665E,{ink:false});
       lid.position.set(-29.55,5.92,z); scene.add(lid);
     }
-    // service drop running toward the houses
-    const drop=M(new THREE.BoxGeometry(2.6,.05,.05),0x2B2B2B,{ink:false});
-    drop.position.set(-28.6,6.1,z); drop.rotation.z=-.16; scene.add(drop);
+    /* The service drop loops from the crossarm DOWN to the transformer can on
+       the same pole, which is a real object it can actually terminate on. It
+       used to be a straight box aimed off toward the houses that simply
+       stopped in open air a couple of units out. */
+    if(i%2===0){
+      scene.add(wireSpan(new THREE.Vector3(-30.15,6.5,z),
+                         new THREE.Vector3(-29.55,5.9,z),.22));
+      scene.add(wireSpan(new THREE.Vector3(-29.95,6.5,z),
+                         new THREE.Vector3(-29.55,5.9,z),.30));
+    }
     tops.push(new THREE.Vector3(-30,7.4,z));
   });
-  const wireM=new THREE.LineBasicMaterial({color:nightMode?0x0A0C10:0x1A1A1A});
   for(let i=0;i<tops.length-1;i++) for(let k=0;k<7;k++){
     const a=tops[i], b=tops[i+1];
-    const sag=.7+((k*37)%11)/9, off=(k-3)*.16, drop=(k<4?0:.9)+((k*29)%7)/14, pts=[];
-    for(let s2=0;s2<=10;s2++){
-      const t=s2/10;
-      pts.push(new THREE.Vector3(a.x+off, a.y-drop-Math.sin(t*Math.PI)*sag, a.z+(b.z-a.z)*t));
-    }
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),wireM));
+    const off=(k-3)*.16, drop=(k<4?0:.9)+((k*29)%7)/14;
+    scene.add(wireSpan(
+      new THREE.Vector3(a.x+off,a.y-drop,a.z),
+      new THREE.Vector3(b.x+off,b.y-drop,b.z),
+      .7+((k*37)%11)/9));
   }
 }
 
