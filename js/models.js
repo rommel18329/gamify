@@ -479,6 +479,140 @@ function unregisterVRM(vrm){
   if(i>=0) VRM_ANIMATED.splice(i,1);
 }
 
+/* ---- THE WARDROBE ---------------------------------------------------------
+   VRoid names every material by the role it plays -- `..._SKIN`, `..._CLOTH`,
+   `..._HAIR`, `..._FACE`, `..._EYE`, and the CLOTH ones additionally say
+   Tops / Bottoms / Shoes. That is VRoid's own export convention, not a guess
+   made here, which is what lets this work on any .vrm the player exports
+   rather than only on the one file in this repo. Confirmed against the
+   bundled sample before any of this was written: its Body mesh really does
+   carry Tops, Bottoms and Shoes as separate primitives, and hair is its own
+   mesh entirely.
+
+   Two operations, and they are very different in cost:
+
+   - SHOW/HIDE a slot is free and works on a single file. Enough on its own
+     for "take the jacket off".
+   - WEAR a garment from a DIFFERENT .vrm is the actual wardrobe, and needs
+     the garment rebound onto this character's skeleton (vrmWear below).
+
+   What this deliberately does NOT do is change a garment's SHAPE. A VRoid
+   export bakes the cut of the clothes into the mesh, so an oversized tee and
+   a fitted one are two different exports -- there is no slider. Different
+   silhouettes come from more exports, not from code. */
+const VRM_SLOTS=['hair','top','bottom','shoes'];
+
+function vrmSlotOf(materialName){
+  const n=String(materialName||'');
+  if(/Tops/i.test(n))    return 'top';
+  if(/Bottoms/i.test(n)) return 'bottom';
+  if(/Shoes/i.test(n))   return 'shoes';
+  if(/_HAIR/i.test(n))   return 'hair';
+  if(/_SKIN/i.test(n))   return 'body';
+  return null;   // face, eyes, eyelashes, brows -- never swappable
+}
+
+/* Every mesh of this character, bucketed by slot. 'body' is included (it is
+   what a hidden garment exposes) but is not in VRM_SLOTS: you cannot take it
+   off. */
+function vrmParts(vrm){
+  const out={};
+  if(!vrm||!vrm.scene) return out;
+  vrm.scene.traverse(function(o){
+    if(!o.isMesh&&!o.isSkinnedMesh) return;
+    const mats=Array.isArray(o.material)?o.material:[o.material];
+    const slot=vrmSlotOf(mats[0]&&mats[0].name);
+    if(slot){ (out[slot]=out[slot]||[]).push(o); }
+  });
+  return out;
+}
+
+function vrmSkeleton(vrm){
+  let sk=null;
+  if(vrm&&vrm.scene) vrm.scene.traverse(function(o){
+    if(!sk&&o.isSkinnedMesh&&o.skeleton) sk=o.skeleton; });
+  return sk;
+}
+
+function vrmSetSlot(vrm,slot,visible){
+  const parts=vrmParts(vrm)[slot]||[];
+  parts.forEach(function(m){ m.visible=!!visible; });
+  return parts.length;
+}
+
+/* Tints a slot. NOTE THE LIMIT, measured on the bundled sample: every VRoid
+   material is texture-driven with a neutral white colour factor, so the
+   garment's colour lives in the painted image. A tint therefore MULTIPLIES --
+   it can darken and shift hue but it cannot brighten. Dark hair goes black or
+   deep blue; it does not go platinum. Same rule as detailMap()'s "textures are
+   multiply maps only" in game.js, arriving from the other direction. */
+function vrmTint(vrm,slot,hex){
+  (vrmParts(vrm)[slot]||[]).forEach(function(m){
+    (Array.isArray(m.material)?m.material:[m.material]).forEach(function(mat){
+      if(mat&&mat.color) mat.color.setHex(hex);
+    });
+  });
+}
+
+/* Wears a garment taken from ANOTHER .vrm. The donor mesh's skinIndex values
+   are indices into the DONOR's bone array and mean nothing against this
+   character's skeleton, so they are remapped BY BONE NAME. Trusting the two
+   arrays to happen to share an order would work for two exports of the same
+   base body and fail silently on any other pair -- the kind of bug that shows
+   up as one sleeve turned inside out rather than as an error. Measured on a
+   real pair: 103 of 103 bones remapped, zero unmatched, and a vertex high on
+   the garment moves with the body once the character walks.
+
+   Returns the new mesh, or null if the donor has nothing in that slot. */
+function vrmWear(hostVrm,donorVrm,slot){
+  const donorMesh=(vrmParts(donorVrm)[slot]||[])[0];
+  const skel=vrmSkeleton(hostVrm);
+  if(!donorMesh||!donorMesh.skeleton||!skel) return null;
+
+  const idxByName={};
+  skel.bones.forEach(function(b,i){ idxByName[b.name]=i; });
+  const remap=donorMesh.skeleton.bones.map(function(b){ return idxByName[b.name]; });
+
+  const geo=donorMesh.geometry.clone();
+  const si=geo.attributes.skinIndex;
+  const arr=si.array.slice();
+  for(let i=0;i<arr.length;i++){
+    const m=remap[arr[i]];
+    arr[i]=(m===undefined?0:m);   // an unmatched bone falls back to the root
+  }
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(arr, si.itemSize));
+
+  const mat=Array.isArray(donorMesh.material)
+    ? donorMesh.material.map(function(m){ return m.clone(); })
+    : donorMesh.material.clone();
+  const worn=new THREE.SkinnedMesh(geo,mat);
+  worn.frustumCulled=false;            // same reason as loadVRM(): this
+  worn.userData.sharedGeo=false;       // geometry is a per-character clone
+  worn.userData.vrmSlot=slot;
+  worn.bind(skel,new THREE.Matrix4());
+
+  vrmSetSlot(hostVrm,slot,false);      // take off what is already there
+  const anchorMesh=(vrmParts(hostVrm).body||[])[0];
+  (anchorMesh?anchorMesh.parent:hostVrm.scene).add(worn);
+  (hostVrm.userData.worn=hostVrm.userData.worn||{})[slot]=worn;
+  return worn;
+}
+
+/* Applies a saved fit record to a freshly-loaded character. The record is
+   small and plain -- {hide:{top:1}, tint:{hair:1644825}} -- because it lives
+   in S, which has to stay JSON-serialisable (see data.js). Nothing here
+   throws on a slot the model does not have: a fit saved against one .vrm is
+   applied to a different one all the time (the player swaps characters), and
+   a missing slot is simply skipped. */
+function applyVRMFit(vrm,fit){
+  if(!vrm||!fit) return;
+  const hide=fit.hide||{}, tint=fit.tint||{};
+  VRM_SLOTS.forEach(function(slot){
+    vrmSetSlot(vrm,slot,!hide[slot]);
+    if(tint[slot]!==undefined&&tint[slot]!==null) vrmTint(vrm,slot,tint[slot]);
+  });
+}
+
 /* ---- storing an uploaded .vrm ----
    A VRM is ~15MB — nowhere near localStorage's realistic quota (5-10MB
    shared with the actual save), and it must never go anywhere near S itself

@@ -118,11 +118,19 @@ function blank(){
     deal:null,             // today's discounted item
     achieved:{},           // achievement id -> unlocked timestamp
     stats:{},              // running counters the achievement tests read
+    fits:{},               // cash-tier colourways owned — see DRIP_FITS
     cash:0, standing:0, lifetime:0, level:1, xp:0,
     security:{locks:0,lights:0,cameras:0,alarm:0,doors:0,dog:0,safe:0,detail:0},
     cond:{locks:100,lights:100,cameras:100,alarm:100,doors:100,dog:100,safe:100,detail:100},
     vehicle:{tier:0,mods:{tires:0,wheels:0,tint:0,tune:0},paint:'#6E7B8B'},
     person:{skin:'#C9884F',outfit:'#2C3242',wardrobe:0,grooming:0,
+      /* What the character is WEARING, as opposed to which body it is.
+         Deliberately a separate key from `character` below: the fit survives
+         swapping bodies, which is what a wardrobe means. Shape is
+         {hide:{slot:1}, tint:{slot:0xRRGGBB}} — plain numbers and flags only,
+         never a mesh or a THREE object, because S round-trips through
+         exportSave()'s textarea (see "Keep S strictly JSON-serialisable"). */
+      fit:{hide:{},tint:{}},
       /* Which body the player's character actually loads as — see
          "VRM characters" in CLAUDE.md. {type:'default'} is the original
          GLB/primitive system (modelPerson()||makePerson(), unchanged).
@@ -1201,6 +1209,94 @@ function respect(){
    runs after every log, purchase and incident. Anything that would need to walk
    a year of history should keep a counter in S.stats instead, the way
    `earlyAM` and `lateNight` do below. */
+/* ===================== EL DRIP: THE FIT CATALOGUE =====================
+   Colourways the player can wear, per slot, in three tiers. The TIERS are the
+   mechanic; the specific entries below are a starting set, not a finished
+   catalogue.
+
+   Three tiers because the interesting question is not "can you afford it" but
+   "how did you get it":
+     - `free`   ships with the character. The starting fit has to already look
+                sharp — an unlock must read as "now you look like somebody",
+                never as "now you stop looking broke".
+     - `cash`   bought on the DRIP track, the ordinary ladder.
+     - `earned` cannot be bought at ANY price. Gated on mastered habits or a
+                streak, which is the only drip in the game that says something
+                true about the person wearing it.
+
+   An earned piece is never taken back once unlocked — the streak gate reads
+   the best streak ever reached, not the current one. Losing a streak already
+   costs enough; clawing back a thing someone earned is the kind of punishment
+   that makes people quit rather than try harder (same reasoning as the freeze
+   in "Streaks and the freeze").
+
+   NOTE THE REAL LIMIT, measured on a VRoid export: every garment material is
+   texture-driven with a neutral white colour factor, so a tint MULTIPLIES the
+   painted image. It can darken and shift hue; it cannot brighten. Values here
+   are chosen to sit on the darker side for that reason — a "white tee" entry
+   would simply not work. Different CUTS (oversized, franela, baggy) are not
+   colours at all and cannot come from this table: they are separate .vrm
+   exports, see vrmWear() in models.js. */
+const FIT_SLOTS=['hair','top','bottom','shoes'];
+const DRIP_FITS={
+  hair:[
+    {id:'hair_stock', name:'As exported',    tier:'free', tint:null},
+    {id:'hair_noche', name:'Noche',          tier:'cash', price:340,  tint:0x14100C},
+    {id:'hair_vino',  name:'Vino',           tier:'cash', price:520,  tint:0x4A1F22},
+    {id:'hair_azul',  name:'Azul Medianoche',tier:'earned', tint:0x1B2340, need:{m:3},
+       why:'3 habits automatic'}
+  ],
+  top:[
+    {id:'top_stock',  name:'As exported',    tier:'free', tint:null},
+    {id:'top_carbon', name:'Carbón',         tier:'cash', price:260,  tint:0x24262B},
+    {id:'top_tinto',  name:'Tinto',          tier:'cash', price:480,  tint:0x6E2230},
+    {id:'top_verde',  name:'Verde Colmado',  tier:'cash', price:900,  tint:0x2C4434},
+    {id:'top_oro',    name:'Oro Viejo',      tier:'earned', tint:0x6B5A2A, need:{streak:30},
+       why:'a 30-day streak, ever'}
+  ],
+  bottom:[
+    {id:'bot_stock',  name:'As exported',    tier:'free', tint:null},
+    {id:'bot_indigo', name:'Índigo',         tier:'cash', price:300,  tint:0x2B3A56},
+    {id:'bot_humo',   name:'Humo',           tier:'cash', price:560,  tint:0x3A3D42},
+    {id:'bot_luto',   name:'Luto',           tier:'earned', tint:0x1A1A1E, need:{m:6},
+       why:'6 habits automatic'}
+  ],
+  shoes:[
+    {id:'sho_stock',  name:'As exported',    tier:'free', tint:null},
+    {id:'sho_asfalto',name:'Asfalto',        tier:'cash', price:220,  tint:0x2A2C30},
+    {id:'sho_sangre', name:'Sangre',         tier:'cash', price:700,  tint:0x7A2020},
+    {id:'sho_campeon',name:'Campeón',        tier:'earned', tint:0x5A4A1F, need:{L:1},
+       why:'one habit line finished end to end'}
+  ]
+};
+function fitEntry(slot,id){
+  return (DRIP_FITS[slot]||[]).find(function(f){ return f.id===id; })||null;
+}
+/* Why a fit is or is not available. Returns {ok:true} or {ok:false, why:'...'}
+   — one source of truth, so the sheet, the till and any future inventory
+   cannot disagree about a gate, the same rule maestriaLock() already follows. */
+function fitLock(f){
+  if(!f||f.tier==='free') return {ok:true};
+  if(f.tier==='cash') return (S.fits&&S.fits[f.id])?{ok:true}
+    :{ok:false,why:'💵'+f.price.toLocaleString()};
+  const n=f.need||{};
+  if(n.m!==undefined&&masteryCount()<n.m) return {ok:false,why:f.why};
+  if(n.L!==undefined&&linesComplete()<n.L) return {ok:false,why:f.why};
+  if(n.streak!==undefined&&(S.stats&&S.stats.bestStreak||0)<n.streak)
+    return {ok:false,why:f.why};
+  return {ok:true};
+}
+/* Buys a cash-tier fit. Goes through the same single money path everything
+   else does — never touch S.cash directly (see "Money and standing only ever
+   move through earn()"). */
+function buyFit(f){
+  if(!f||f.tier!=='cash'||(S.fits&&S.fits[f.id])) return false;
+  if(S.cash<f.price) return false;
+  S.cash-=f.price;
+  S.fits=S.fits||{}; S.fits[f.id]=1;
+  save(); return true;
+}
+
 const ACHIEVEMENTS=[
   // ---- visible ----
   {id:'madrugador', nm:'MADRUGADOR', art:'sunrise',

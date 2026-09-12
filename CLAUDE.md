@@ -667,7 +667,124 @@ modules now"): it checks `typeof VRM_PRESETS!=='undefined'` and shows "still
 loading" for the preset rows rather than throwing, the same class of guard
 `enterWorldSafe()` already used for ENTER itself.
 
-Four things bite here, all found by measuring rather than assumed:
+#### Borrowing a walk cycle (`makeVRMRetargeter`)
+
+A VRoid export ships a skeleton and **no animation whatsoever**. The
+Quaternius GLBs already in `assets/` carry **24 clips** on a full humanoid
+rig. `makeVRMRetargeter()` in `js/models.js` maps one onto the other, so a
+VRM character walks with the same animation as everything else in the world
+— no new asset, no authoring, and all 24 clips come along free because a
+**pose** is copied rather than a clip converted.
+
+An invisible Quaternius rig (the "puppet") is driven by an ordinary
+`THREE.AnimationMixer` playing the real clip; its bone pose is copied onto
+the VRM's *normalized* humanoid bones, and `vrm.update()` then copies those
+onto the skinned skeleton. **Order matters**: retarget first, `vrm.update()`
+second — `updateVRM()` does this — or the mesh renders a frame stale and, on
+the first frame, in its bind pose.
+
+Three things were measured, and each one on its own left the character
+silently T-posed with no error anywhere:
+
+- **The two rigs rest in different poses.** Measured: Quaternius rests with
+  arms hanging down (**156°** off vertical), VRoid rests in a true T-pose
+  (**92°**). Plain delta retargeting — take the source's rotation relative to
+  its own rest, apply it to the target — *preserves the target's rest pose by
+  construction*, so the VRM kept its T-pose with a small walk swing added on
+  top. The fix is the per-bone `align`: swing each target bone's rest
+  direction onto the source's first, so the target adopts the source's pose
+  instead of decorating its own.
+- **Bone direction cannot come from "the first child that `isBone`".**
+  three-vrm builds its normalized rig from plain `Object3D` nodes, **not**
+  `THREE.Bone`, so that test found nothing on the target side and every
+  alignment quietly fell back to identity. `VRM_BONE_CHILD` names the chain
+  explicitly so both rigs answer the same question the same way.
+- **Both rigs must be read in ONE coordinate frame.** Source-in-world against
+  target-relative-to-`vrm.scene` puts the alignment half a turn out, because
+  `vrm.scene` carries `rotateVRM0()`'s rotation. The puppet is pinned to the
+  VRM's own world transform every frame — which also makes the retarget
+  indifferent to which way the character is facing, since both rigs turn
+  together.
+
+Also note the **multiply order** in `C = S_rest⁻¹ · align · T_rest`.
+Premultiplying gives a conjugation instead, which leaves the target sitting
+in its own rest pose — measured at 104°, still essentially the T-pose, and it
+looks like "almost working" rather than like a bug.
+
+Verified by measurement, not by eye: the VRM's shoulder-to-hand angle tracks
+the puppet's to within a fraction of a degree, and the left foot swings
+through a **1.77-unit stride** across the cycle (1.75 through the real game
+path). If retargeting is unavailable — the GLBs failed to download, so there
+is no rig to borrow from — `makeVRMRetargeter()` returns `null` and
+`stepVRM()` falls back to its forward lean rather than throwing.
+
+#### The wardrobe
+
+VRoid names every material by role — `_SKIN`, `_CLOTH`, `_HAIR`, `_FACE`,
+`_EYE`, with the CLOTH ones additionally saying Tops / Bottoms / Shoes. That
+is VRoid's own export convention, **not a guess**, which is what lets
+`vrmSlotOf()` work on any `.vrm` the player exports rather than only on the
+bundled sample. Confirmed against that sample first: its Body mesh really
+does carry Tops, Bottoms and Shoes as separate primitives, and hair is its
+own mesh.
+
+Two operations, very different in cost:
+
+- **Show/hide** a slot (`vrmSetSlot`) is free and works on a single file.
+- **Wear a garment from a different `.vrm`** (`vrmWear`) is the actual
+  wardrobe. The donor mesh's `skinIndex` values index the **donor's** bone
+  array and mean nothing against another skeleton, so they are remapped **by
+  bone name**. Trusting the two arrays to share an order would work for two
+  exports of the same base body and fail silently on any other pair — the
+  kind of bug that shows up as one sleeve inside-out rather than as an error.
+  Measured on a real pair: **103 of 103 bones remapped, zero unmatched**, and
+  a vertex high on the garment moves with the body once the character walks.
+
+**`Box3.setFromObject` cannot verify any of this** — it transforms the
+geometry's *bind-pose* bounds by the world matrix, so a skinned mesh
+deforming in place reports an identical box every frame. It reported "no
+movement" on a transplant that was working perfectly. Measure a real vertex
+through `applyBoneTransform` instead.
+
+**What this deliberately does NOT do is change a garment's SHAPE.** VRoid
+bakes the cut into the mesh, so an oversized tee and a fitted one are two
+different exports — there is no slider. Different silhouettes come from more
+`.vrm` files, not from code, and `DRIP_FITS` cannot produce them.
+
+#### EL DRIP: the fit catalogue
+
+`DRIP_FITS` in `js/data.js` — colourways per slot in **three tiers**, because
+the interesting question is not "can you afford it" but "how did you get it":
+`free` ships with the character, `cash` is the ordinary DRIP ladder, and
+**`earned` cannot be bought at any price** (gated on mastered habits, completed
+lines, or a best-ever streak). Verified: with 💵999,999 in hand an `earned`
+entry still refuses.
+
+`fitLock(f)` is the single source of truth for availability — the sheet and
+the till cannot disagree about a gate, the same rule `maestriaLock()` follows.
+A locked entry renders **dimmed and still tappable**, never hidden: a thing
+you can see and can't have yet is content. The streak gate reads
+`S.stats.bestStreak` (best ever), never the current streak — earned drip is
+never clawed back, same reasoning as the freeze.
+
+`S.person.character.fit` is `{hide:{slot:1}, tint:{slot:0xRRGGBB}}` — flags
+and numbers only, since `S` must stay JSON-serialisable. It is a **separate
+key from `character`** on purpose: the fit survives swapping bodies, which is
+what a wardrobe means. `applyVRMFit()` is called from `loadPlayerBody()`'s
+swap (alongside `dripAccessories()`), not from `loadVRM()`, because that is
+the moment the character becomes the player's; it skips slots the model
+doesn't have, since a fit saved against one `.vrm` gets applied to another
+all the time.
+
+**A tint MULTIPLIES.** Measured: every VRoid garment material is
+texture-driven with a neutral white colour factor, so the colour lives in the
+painted image. A tint can darken and shift hue; it **cannot brighten**. Dark
+hair goes black or deep blue, never platinum, and a "white tee" entry simply
+would not work — which is why every value in the table sits on the dark side.
+Same rule as `detailMap()`'s "textures are multiply maps only", arriving from
+the other direction.
+
+Four more things bite here, all found by measuring rather than assumed:
 
 - **VRM 0.x faces -Z.** Every other character and the car in this world
   faces +Z (see "All three car representations face +Z" under Car physics).
@@ -697,18 +814,13 @@ Four things bite here, all found by measuring rather than assumed:
   cost you an upgrade you paid for" already rules out for the GLB fallback,
   just arriving through a different door (a *successful* swap, not a failed
   one).
-- **No walk-cycle animation yet.** A raw VRoid export ships a rig and
-  nothing else — no clips, unlike the Quaternius GLBs `modelPerson()` plays
-  directly. Retargeting this world's walk cycle onto an arbitrary VRM's
-  humanoid skeleton (mapping bone names, handling proportion differences) is
-  real, separate work, deliberately not done here. `stepVRM()` in
-  `js/models.js` does what's honest with only a `moving` boolean and no
-  elapsed-time input — a small forward lean on the measured `spine` bone —
-  and always returns `true`, which matters for a reason beyond animation
-  quality: `stepAnim()` returning `false` falls through to `tick()`'s
-  primitive-limb branch (`ud.legL.rotation.x=...`), which reaches for
-  `userData` fields only `makePerson()` ever sets and would throw on any VRM
-  character.
+- **`stepVRM()` never returns false.** It picks walk/idle for the retargeter
+  (see "Borrowing a walk cycle" above) and returns `true` unconditionally,
+  which matters for a reason beyond animation quality: `stepAnim()` returning
+  `false` falls through to `tick()`'s primitive-limb branch
+  (`ud.legL.rotation.x=...`), which reaches for `userData` fields only
+  `makePerson()` ever sets and would throw on any VRM character. Keep that
+  true even in the fallback path where no source rig was available.
 
 ## Rendering conventions (anime/toon look)
 
