@@ -90,6 +90,30 @@ sub(`    gl.load(ASSET_BASE+CHAR_MODELS[n],
     }catch(e){ finish(); }   // bad asset -> primitive fallback, not a crash`,
     'character parse');
 
+/* GARMENT PARTS. Same rule as the characters above and for the same measured
+   reason: a data: URI goes through FileLoader's XHR, which connect-src
+   refuses. Only the three file-backed cuts need this -- the other four are
+   parts of the two character GLBs already inlined. */
+const partB64 = {};
+for (const f of ['Beach_Body.glb','Beach_Legs.glb','Farmer_Pants.glb'])
+  partB64['characters/parts/'+f] = rawB64('assets/characters/parts/'+f);
+sub(`  new THREE.GLTFLoader().load(ASSET_BASE+def.file,
+    g=>{ GARMENT_CACHE[partId]=g.scene; done(g.scene); },
+    undefined,
+    ()=>{ GARMENT_CACHE[partId]=null; done(null); });`,
+`  const __b64=__GARMENT_B64[def.file];
+  if(!__b64){ GARMENT_CACHE[partId]=null; done(null); return; }
+  try{
+    new THREE.GLTFLoader().parse(__b64buf(__b64), '',
+      g=>{ GARMENT_CACHE[partId]=g.scene; done(g.scene); },
+      ()=>{ GARMENT_CACHE[partId]=null; done(null); });
+  }catch(e){ GARMENT_CACHE[partId]=null; done(null); }`,
+    'garment parse');
+sub(`const GARMENT_CACHE={};`,
+`const __GARMENT_B64=${JSON.stringify(partB64)};
+const GARMENT_CACHE={};`,
+    'GARMENT_B64');
+
 /* No vehicle substitution any more: the car is the Civic EK hatchback that
    makeCar() builds from primitives in game.js, so there is no .obj to inline
    and nothing here to rewrite. If a vehicle model is ever added back to

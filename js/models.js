@@ -722,6 +722,226 @@ function applyVRMFit(vrm,fit){
   });
 }
 
+
+/* ===================== THE WARDROBE (garment cuts) =====================
+   Swapping the SHAPE of a garment, not its colour. Everything here moves
+   geometry that already exists: the Quaternius "Ultimate Modular Men" pack
+   (CC0 1.0) ships all eleven characters on one shared 62-bone rig with
+   Body/Head/Legs/Feet as separately-named, deliberately interchangeable
+   nodes. Nothing in this project models a garment; a cut is a part of that
+   pack, loaded and re-bound onto whichever character the player is wearing.
+
+   `node` is the pack's own node name and `mat` is the material name that IS
+   the garment (the rest of the node is skin, waistbands, trim), so a tint
+   lands on the cloth and not on the arms. `src` names an already-loaded
+   CHAR_MODELS entry — those two files are downloaded for the world anyway,
+   so four of the seven cuts cost nothing extra; only the other three are
+   their own (small, mesh-only, animation-free) download. */
+const GARMENT_PARTS={
+  hoodie_top:  {src:'hoodie', node:'Casual_Body',  mat:'Purple'},
+  tee_top:     {src:'casual', node:'Casual2_Body', mat:'LightBrown'},
+  franela_top: {file:'characters/parts/Beach_Body.glb',   node:'Beach_Body',   mat:'LightBrown'},
+  denimshorts: {src:'hoodie', node:'Casual_Legs',  mat:'LightBlue'},
+  jeans:       {src:'casual', node:'Casual2_Legs', mat:'LightBlue'},
+  gymshorts:   {file:'characters/parts/Beach_Legs.glb',   node:'Beach_Legs',   mat:'Red_Dark'},
+  baggy:       {file:'characters/parts/Farmer_Pants.glb', node:'Farmer_Pants', mat:'LightBlue'}
+};
+/* Which node names a character's own top/bottom already go by. Every model in
+   the pack follows <Character>_Body / _Legs (the Farmer calls its bottom
+   _Pants), so this matches the character you start in as well as anything
+   worn over it. */
+const CUT_SLOT_RE={ top:/_Body$/, bottom:/_(Legs|Pants)$/ };
+/* Material names that are the BODY, not the clothes — used when reading a
+   garment's colour off a node whose `mat` we don't know (the character's own
+   original top/bottom, before any cut has been worn). */
+const CLOTH_MAT_SKIP=/^(Skin|Skin_Darker|Eye|Eyebrows|Hair|Hair_White|Moustache)$/;
+
+/* Downloaded-once cache for the parts that aren't already in ASSETS.chars.
+   A value of `null` means "tried and failed" — a missing garment leaves the
+   character in what it had on, the same rule modelPerson()||makePerson()
+   follows for the character itself. */
+const GARMENT_CACHE={};
+function loadGarment(partId,done){
+  const def=GARMENT_PARTS[partId];
+  if(!def){ done(null); return; }
+  if(def.src){                       // already downloaded for the world
+    const src=ASSETS.chars[def.src];
+    done(src?src.scene:null); return;
+  }
+  if(GARMENT_CACHE[partId]!==undefined){ done(GARMENT_CACHE[partId]); return; }
+  if(typeof THREE==='undefined'||typeof THREE.GLTFLoader!=='function'){ done(null); return; }
+  /* build_single.js swaps this branch for a parse() of inlined base64 — a
+     data: URI would go through FileLoader's XHR and be refused by the
+     artifact host's connect-src. See "One file, no server, no CSP". */
+  new THREE.GLTFLoader().load(ASSET_BASE+def.file,
+    g=>{ GARMENT_CACHE[partId]=g.scene; done(g.scene); },
+    undefined,
+    ()=>{ GARMENT_CACHE[partId]=null; done(null); });
+}
+
+/* Re-index a donor garment's skinIndex values from the DONOR's bone array to
+   the HOST's, BY BONE NAME. The two arrays happen to agree today — every file
+   in the pack exports the same rig in the same order — but trusting that is
+   exactly the bug vrmWear() already documents: a wrong order shows up as one
+   sleeve inside-out, never as an error. Measured on every cut here: 62 of 62
+   bones matched, zero misses.
+
+   The remapped geometry is cached per part, so wearing a cut twice (a preview
+   repaint, a second ENTER) re-uses one buffer instead of rebuilding it. */
+const GARMENT_GEO={};
+function bindGarment(mesh,donorSkel,hostSkel,key){
+  let geo=GARMENT_GEO[key];
+  if(!geo){
+    geo=mesh.geometry.clone();
+    const map=new Int32Array(donorSkel.bones.length);
+    let miss=0;
+    for(let i=0;i<donorSkel.bones.length;i++){
+      const nm=donorSkel.bones[i].name;
+      let j=-1;
+      for(let k=0;k<hostSkel.bones.length;k++){ if(hostSkel.bones[k].name===nm){ j=k; break; } }
+      map[i]=j; if(j<0) miss++;
+    }
+    if(miss===0||miss<donorSkel.bones.length){
+      const si=geo.attributes.skinIndex, arr=si.array.slice();
+      for(let i=0;i<arr.length;i++){ const m=map[arr[i]]; arr[i]=m<0?0:m; }
+      geo.setAttribute('skinIndex',new THREE.BufferAttribute(arr,4));
+    }
+    GARMENT_GEO[key]=geo;
+  }
+  mesh.geometry=geo;
+  mesh.bind(hostSkel,mesh.bindMatrix);
+}
+
+/* Puts one cut on one character. Synchronous once the part is loaded; returns
+   false if there was nothing to wear, in which case the character keeps
+   whatever it already had on. */
+function wearCutNow(host,slot,partId,donorScene,tint){
+  const def=GARMENT_PARTS[partId];
+  if(!host||!def||!donorScene||typeof THREE.SkeletonUtils==='undefined') return false;
+
+  let hostSkel=null;
+  host.traverse(o=>{ if(!hostSkel&&o.isSkinnedMesh) hostSkel=o.skeleton; });
+  if(!hostSkel) return false;        // a primitive makePerson() body — nothing to dress
+
+  const donor=THREE.SkeletonUtils.clone(donorScene);
+  let donorSkel=null,node=null;
+  donor.traverse(o=>{ if(!donorSkel&&o.isSkinnedMesh) donorSkel=o.skeleton; });
+  donor.traverse(o=>{ if(!node&&o.name===def.node) node=o; });
+  if(!donorSkel||!node) return false;
+
+  /* Take the OLD garment off first, and find the armature to hang the new one
+     from while doing it. Matching on userData.cutSlot as well as the name is
+     what stops outfits STACKING: a worn cut keeps its donor's node name
+     (Beach_Body on a Casual character), so name-matching alone misses it on
+     the next change and you end up wearing both. */
+  const re=CUT_SLOT_RE[slot];
+  let arm=null;
+  const doomed=[];
+  host.traverse(o=>{
+    if(o.userData.cutSlot===slot||(re&&re.test(o.name)&&(o.isMesh||o.type==='Group'))) doomed.push(o);
+  });
+  /* Inherit the colour the outgoing garment was wearing, unless the caller
+     asked for a specific tint. Changing your CUT should not silently change
+     your COLOUR back to whatever the donor file happened to export -- the
+     Farmer's pants ship near-black, so picking "baggy" over a pair of indigo
+     shorts turned the character's legs black with nothing having asked for
+     that. Colour and cut are separate choices and neither may reset the
+     other. */
+  const inheritMap={}; let inherited=null;
+  doomed.forEach(o=>o.traverse(m=>{
+    if(!m.isMesh||!m.material) return;
+    (Array.isArray(m.material)?m.material:[m.material]).forEach(mat=>{
+      if(!mat||!mat.name||inheritMap[mat.name]!==undefined) return;
+      inheritMap[mat.name]=mat.color.getHex();
+      if(inherited===null&&!CLOTH_MAT_SKIP.test(mat.name)) inherited=mat.color.getHex();
+    });
+  }));
+  doomed.forEach(o=>{ if(!arm) arm=o.parent; if(o.parent) o.parent.remove(o); });
+  if(!arm) host.traverse(o=>{ if(!arm&&o.name==='CharacterArmature') arm=o; });
+  if(!arm) arm=host;
+
+  node.traverse(o=>{
+    if(!o.isSkinnedMesh) return;
+    bindGarment(o,donorSkel,hostSkel,partId+'|'+o.name);
+    o.userData.sharedGeo=true;             // geometry is GARMENT_GEO's, not this clone's
+    o.material=Array.isArray(o.material)?o.material.map(m=>m.clone()):o.material.clone();
+    (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
+      if(!m||!m.name) return;
+      /* Every material the outgoing part had, by name -- not just the cloth.
+         A top carries the TORSO AND ARM SKIN with it (that is what makes a
+         franela sleeveless at all), so wearing one straight from the donor
+         file changed the character's skin tone along with the shirt. */
+      if(inheritMap[m.name]!==undefined) m.color.setHex(inheritMap[m.name]);
+      if(m.name!==def.mat) return;
+      /* baseHex is what this garment sits at when NO colourway is chosen, and
+         that is the colour it inherited -- not the donor file's own export.
+         Recording the donor's value here instead is what made a second pass
+         (applyCuts runs again on every slider input, and tintCut() resets an
+         untinted slot to baseHex) quietly undo the inheritance one frame
+         later: the shorts changed colour by themselves after a repaint. */
+      m.userData.baseHex=(inherited!==null&&inherited!==undefined)
+        ? inherited : m.color.getHex();
+      const c=(tint!==undefined&&tint!==null)?tint:m.userData.baseHex;
+      m.color.setHex(c); m.userData.tinted=(tint!==undefined&&tint!==null);
+    });
+    /* Bind-pose bounds put a skinned garment's bounding sphere somewhere the
+       posed mesh is not, which culls a worn garment at some camera angles and
+       not others. */
+    o.frustumCulled=false;
+  });
+  node.userData.cutSlot=slot;
+  arm.add(node);
+  return true;
+}
+
+/* Applies every saved cut to a character, loading whatever it needs first.
+   Async and entirely optional: a cut that fails to load leaves the character
+   in what it already had on, never a half-dressed body or a thrown error. */
+function applyCuts(host,fit,done){
+  if(typeof CUT_SLOTS==='undefined'||!host){ done&&done(); return; }
+  const tints=(fit&&fit.tint)||{};
+  host.userData.worn=host.userData.worn||{};
+  let pending=CUT_SLOTS.length, changed=false;
+  const finish=()=>{ if(--pending<=0) done&&done(changed); };
+  CUT_SLOTS.forEach(slot=>{
+    const cut=(typeof currentCut==='function')?currentCut(slot):null;
+    if(!cut||!cut.part){ finish(); return; }
+    /* Already wearing it -> re-tint in place and stop. The preview calls this
+       on every slider input, and a full re-wear clones a 62-bone rig each
+       time; only an actual CHANGE of cut is worth that. */
+    if(host.userData.worn[slot]===cut.part){ tintCut(host,slot,tints[slot]); finish(); return; }
+    loadGarment(cut.part,scene=>{
+      if(scene&&wearCutNow(host,slot,cut.part,scene,tints[slot])){
+        host.userData.worn[slot]=cut.part; changed=true;
+      }
+      finish();
+    });
+  });
+}
+
+/* Recolours the garment already on the body, without swapping any geometry.
+   `hex` of null/undefined means "as exported", which is the colour the fit
+   system (dripFit/FITS) put there when the character was built, so it is
+   restored from the material's own record rather than guessed. */
+function tintCut(host,slot,hex){
+  if(!host) return false;
+  let node=null;
+  host.traverse(o=>{ if(!node&&o.userData.cutSlot===slot) node=o; });
+  if(!node) return false;
+  const partId=host.userData.worn&&host.userData.worn[slot];
+  const def=partId?GARMENT_PARTS[partId]:null;
+  node.traverse(o=>{
+    if(!o.isMesh||!o.material) return;
+    (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
+      if(!m||(def&&m.name!==def.mat)) return;
+      if(m.userData.baseHex===undefined) m.userData.baseHex=m.color.getHex();
+      if(hex===undefined||hex===null){ m.color.setHex(m.userData.baseHex); m.userData.tinted=false; }
+      else { m.color.setHex(hex); m.userData.tinted=true; }
+    });
+  });
+  return true;
+}
+
 /* ---- storing an uploaded .vrm ----
    A VRM is ~15MB — nowhere near localStorage's realistic quota (5-10MB
    shared with the actual save), and it must never go anywhere near S itself
