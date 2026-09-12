@@ -127,10 +127,11 @@ function blank(){
       /* What the character is WEARING, as opposed to which body it is.
          Deliberately a separate key from `character` below: the fit survives
          swapping bodies, which is what a wardrobe means. Shape is
-         {hide:{slot:1}, tint:{slot:0xRRGGBB}} — plain numbers and flags only,
+         {hide:{slot:1}, tint:{slot:0xRRGGBB}, cut:{slot:'cut_id'}} — plain
+         numbers, flags and short ids only,
          never a mesh or a THREE object, because S round-trips through
          exportSave()'s textarea (see "Keep S strictly JSON-serialisable"). */
-      fit:{hide:{},tint:{}},
+      fit:{hide:{},tint:{},cut:{}},
       /* Body proportions, 1.0 = the model exactly as exported. Plain numbers
          only, same reason as `fit` — S round-trips through exportSave(). */
       body:{},
@@ -1251,6 +1252,7 @@ const DRIP_FITS={
   ],
   top:[
     {id:'top_stock',  name:'As exported',    tier:'free', tint:null},
+    {id:'top_blanco', name:'Blanco',         tier:'free', tint:0xEFEEE8},
     {id:'top_carbon', name:'Carbón',         tier:'cash', price:260,  tint:0x24262B},
     {id:'top_tinto',  name:'Tinto',          tier:'cash', price:480,  tint:0x6E2230},
     {id:'top_verde',  name:'Verde Colmado',  tier:'cash', price:900,  tint:0x2C4434},
@@ -1272,6 +1274,48 @@ const DRIP_FITS={
        why:'one habit line finished end to end'}
   ]
 };
+/* ---- THE CUT -------------------------------------------------------------
+   A colourway changes what a garment IS COLOURED; a CUT changes what it IS.
+   Kept as its own catalogue rather than more DRIP_FITS entries because the
+   two are different operations on the model: a tint recolours a material in
+   place, a cut swaps the garment MESH (see wearCut() in models.js).
+
+   Every entry names a real part of the Quaternius "Ultimate Modular Men"
+   pack (CC0 1.0) -- the same pack the characters themselves come from, whose
+   whole premise is that Body/Head/Legs/Feet are interchangeable across all
+   eleven characters on one shared 62-bone rig. No garment here was modelled
+   for this project; `part` is a key into GARMENT_PARTS in models.js, which is
+   the only place that knows which file a cut actually lives in.
+
+   Locking reuses fitLock()/buyFit() unchanged -- they read .tier/.price/.need
+   and nothing else, so a cut and a colourway cannot drift apart on what a
+   gate means. */
+const CUT_SLOTS=['top','bottom'];
+const DRIP_CUTS={
+  top:[
+    {id:'cut_hoodie',  name:'Hoodie',        tier:'free', part:'hoodie_top'},
+    {id:'cut_tee',     name:'T-shirt',       tier:'cash', price:180, part:'tee_top'},
+    {id:'cut_franela', name:'Franela',       tier:'cash', price:240, part:'franela_top'}
+  ],
+  bottom:[
+    {id:'cut_denim',   name:'Denim shorts',  tier:'free', part:'denimshorts'},
+    {id:'cut_gym',     name:'Gym shorts',    tier:'cash', price:200, part:'gymshorts'},
+    {id:'cut_jeans',   name:'Jeans',         tier:'cash', price:300, part:'jeans'},
+    {id:'cut_baggy',   name:'Baggy pants',   tier:'cash', price:420, part:'baggy'}
+  ]
+};
+function cutEntry(slot,id){
+  return (DRIP_CUTS[slot]||[]).find(function(c){ return c.id===id; })||null;
+}
+/* The cut a slot is currently wearing, falling back to that slot's free entry
+   -- so a save written before cuts existed, and a slot the player has never
+   touched, both resolve to what the character already had on. */
+function currentCut(slot){
+  const f=(S.person&&S.person.character&&S.person.character.fit)||{};
+  const id=f.cut&&f.cut[slot];
+  return cutEntry(slot,id)||(DRIP_CUTS[slot]||[])[0]||null;
+}
+
 function fitEntry(slot,id){
   return (DRIP_FITS[slot]||[]).find(function(f){ return f.id===id; })||null;
 }

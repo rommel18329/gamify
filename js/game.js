@@ -2385,8 +2385,13 @@ function buildPlayer(){
 function shapeDefaultBody(){
   if(typeof applyBodyShape!=='function'||!playerGroup) return;
   const ch=(S.person&&S.person.character)||{};
-  if(!ch.body) return;
-  applyBodyShape(playerGroup, ch.body);
+  if(ch.body) applyBodyShape(playerGroup, ch.body);
+  /* The wardrobe, on the DEFAULT character. Garment cuts are parts of the
+     same Quaternius rig this body is, so they only fit here — a VRM has its
+     own skeleton and its own baked-in garments (see applyVRMFit). Async and
+     optional: the character is already on screen and stays dressed in what it
+     loaded with if a part never arrives. */
+  if(typeof applyCuts==='function') applyCuts(playerGroup, ch.fit);
 }
 
 function loadPlayerBody(){

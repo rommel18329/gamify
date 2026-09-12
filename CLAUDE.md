@@ -72,7 +72,9 @@ js/carphysics.js     from-scratch car physics engine (no THREE, no DOM) — the
 js/models.js         loads the CC0 rigged characters + car, recolours them into
                      outfits, drives their animation mixers; also VRM loading,
                      see "VRM characters"
-assets/              CC0 rigged characters (characters/*.glb); there is no
+assets/              CC0 rigged characters (characters/*.glb) plus the
+                     garment meshes in characters/parts/ (see "The wardrobe:
+                     real garment SHAPES"); there is no
                      vehicle model — the car is procedural, see "The car";
                      assets/characters/vrm/ holds the one bundled VRM preset
 js/game.js           the 3D scene: world building (one function per structure —
@@ -757,7 +759,10 @@ through `applyBoneTransform` instead.
 **What this deliberately does NOT do is change a garment's SHAPE.** VRoid
 bakes the cut into the mesh, so an oversized tee and a fitted one are two
 different exports — there is no slider. Different silhouettes come from more
-`.vrm` files, not from code, and `DRIP_FITS` cannot produce them.
+`.vrm` files, not from code, and `DRIP_FITS` cannot produce them. That limit
+is a VRM limit only: the GLB character DOES get real garment shapes, by
+swapping meshes rather than recolouring one — see "The wardrobe: real garment
+SHAPES" below.
 
 #### The in-app character builder
 
@@ -835,6 +840,94 @@ world — so the preview calls `loadAssets()` itself, or `makeVRMRetargeter()`
 finds no source rig and returns `null`. And the retargeter must be **driven**
 each frame (`rt.update()`) before `vrm.update()`; calling `vrm.update()` alone
 leaves the character in its bind pose.
+
+#### The wardrobe: real garment SHAPES (`DRIP_CUTS` / `wearCut`)
+
+A colourway changes what a garment is *coloured*; a **cut** changes what it
+*is*. Seven cuts — hoodie / t-shirt / franela on top, denim shorts / gym
+shorts / jeans / baggy pants below — and **not one of them was modelled for
+this project.** All seven are parts of the Quaternius "Ultimate Modular Men"
+pack (CC0 1.0), the same pack the characters themselves come from, whose whole
+premise is that `<Character>_Body` / `_Head` / `_Legs` / `_Feet` are
+interchangeable nodes on one shared 62-bone rig across all eleven characters.
+`GARMENT_PARTS` in `js/models.js` is the only place that knows which file a cut
+lives in; `DRIP_CUTS` in `js/data.js` is the catalogue the player sees.
+
+**Four of the seven cost nothing to ship**: `Casual_Hoodie.glb` and
+`Casual_2.glb` are downloaded for the world anyway, and between them carry the
+hoodie, the t-shirt, denim shorts and jeans. Only the franela (`Beach_Body`),
+gym shorts (`Beach_Legs`) and baggy pants (`Farmer_Pants`) are their own files,
+in `assets/characters/parts/` — extracted from the pack's own glTF exports with
+three.js's `GLTFExporter`, **meshes and skeleton only, all 24 animation clips
+stripped**, which is what keeps them at 126–333 KB instead of ~3 MB each. The
+clips are not needed: the retargeter already drives this rig.
+
+Locking reuses `fitLock()`/`buyFit()` **unchanged** — they read `.tier`,
+`.price` and `.need` and nothing else — so a cut and a colourway cannot drift
+apart on what a gate means, the same single-source rule `maestriaLock()`
+follows. `S.person.character.fit.cut` is `{top:'cut_id', bottom:'cut_id'}`:
+ids only, since `S` stays JSON-serialisable. `currentCut(slot)` falls back to
+that slot's free entry, so a save written before cuts existed needs no
+migration and resolves to what the character already had on.
+
+**Cuts are for the GLB character only.** A VRM has its own skeleton and VRoid
+bakes the cut into the mesh (see "The wardrobe" above) — the CHARACTER sheet
+hides the cut rows for a VRM body and says why, rather than showing rows that
+would do nothing.
+
+Five things bite here, every one of them found by measuring:
+
+- **`skinIndex` is remapped by BONE NAME, never trusted to match.** A donor
+  garment's indices address the *donor's* bone array. Every file in this pack
+  happens to export the same order today, but trusting that is the bug
+  `vrmWear()` already documents: a wrong order shows up as one sleeve
+  inside-out, never as an error. Measured on all seven cuts: **62 of 62 bones
+  matched, zero misses.** The remapped geometry is cached per part in
+  `GARMENT_GEO` and tagged `userData.sharedGeo`, so it survives
+  `backToTitle()`'s material disposal and a second ENTER (verified: 7,456
+  garment vertices still present on the second trip).
+- **A worn cut keeps its DONOR's node name**, so removing the old garment by
+  name alone misses it and the next change leaves you wearing both. Measured:
+  the hoodie's sleeves with a previous top's bare arms poking through them.
+  `userData.cutSlot` is stamped on every worn node and matched alongside the
+  name — that tag is what makes the removal reliable.
+- **A cut change must not change your COLOUR, and a colour change must not
+  change your cut.** `wearCutNow()` reads every material colour off the
+  OUTGOING part by name and carries it onto the incoming one. Without that,
+  picking "baggy" over a pair of indigo shorts turned the legs near-black,
+  because that is the colour the Farmer's pants ship as.
+- **A top carries the torso AND ARM SKIN with it** — that is what makes a
+  franela sleeveless at all — so the inheritance has to cover `Skin`, not just
+  the cloth, or swapping a shirt changes the character's skin tone.
+- **`baseHex` is the INHERITED colour, not the donor's.** `applyCuts()` runs
+  again on every slider input and re-tints an untinted slot back to `baseHex`;
+  recording the donor's own value there made the inheritance quietly undo
+  itself one repaint later — the shorts changed colour by themselves.
+
+**The preview is live, and stays live.** Tapping a cut or a colourway used to
+call `openCharacter()`, which rebuilds the sheet and therefore tears down and
+re-creates the preview's WebGL context — the character blanked for a beat and
+started its spin from zero on every tap. `repaintFitRows()` patches the rows'
+tick/lock/cue state from `S` in place and leaves the model alone;
+`refreshCharPreview()` re-dresses it. `applyCuts()` is idempotent per slot
+(it compares `host.userData.worn[slot]` and falls through to `tintCut()`), or
+every pixel of a slider drag would clone a 62-bone rig. The preview renderer
+now also sets `preserveDrawingBuffer` for the same measured reason the world's
+does: without it a headless `toDataURL()` of that canvas reads back empty
+even though the frame drew correctly, and screenshotting the preview is the
+only way a change to the builder gets verified at all.
+
+**Known inconsistency, pre-existing and deliberately not changed here:**
+`blank()` puts `fit` and `body` under `S.person`, but every reader
+(`openCharacter()`, `loadPlayerBody()`, `shapeDefaultBody()`) uses
+`S.person.character.fit` / `.body`, which is created lazily on first write.
+The `blank()` copies are dead keys. The live path is the `character.` one —
+follow it; moving the data to match `blank()` would strip the fit off every
+existing save.
+
+**Cost:** +587 KB of assets, +0.78 MB on `sprout.html` (8.46 → 9.24 MB, still
+well under the 16 MB cap) and **+7 ms** to interactive behind the artifact's
+own CSP (128 → 135 ms, median of three).
 
 #### EL DRIP: the fit catalogue
 

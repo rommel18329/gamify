@@ -507,7 +507,13 @@ function startCharPreview(){
   if(!host||!charPreviewReady()) return;
   disposeCharPreview();
   const w=host.clientWidth||300, h=260;
-  const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+  /* preserveDrawingBuffer for the same measured reason the world's renderer
+     sets it (see "The engine is ES modules now"): without it a headless
+     toDataURL()/readPixels() of this canvas reads back empty even though the
+     frame drew correctly, and screenshotting the preview is how a change to
+     the builder gets verified at all. */
+  const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,
+    preserveDrawingBuffer:true});
   renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
   renderer.setSize(w,h);
   if(THREE.SRGBColorSpace) renderer.outputColorSpace=THREE.SRGBColorSpace;
@@ -611,6 +617,40 @@ function startCharPreview(){
   tick();
 }
 
+/* Repaints the tick/lock/cue state of every fit and cut row FROM S, in place.
+   Rebuilding the whole sheet (openCharacter()) would work too, and is what
+   this used to do -- but it also tears down and re-creates the preview's
+   WebGL context, so every tap blanked the character for a beat and started it
+   spinning from zero again. Picking clothes is the one screen where you have
+   to see the change, so the rows are patched and the model is left alone. */
+function repaintFitRows(){
+  const fit=(S.person&&S.person.character&&S.person.character.fit)||{};
+  const paint=(el,sel,locked,cue)=>{
+    el.classList.toggle('done',!!sel);
+    el.classList.toggle('lk',!!locked);
+    const ck=el.querySelector('.ck'); if(ck) ck.textContent=sel?'\u2713':'';
+    const c=el.querySelector('.cue'); if(c) c.textContent=cue;
+  };
+  document.querySelectorAll('#sheetBody [data-fit]').forEach(el=>{
+    const [slot,id]=el.getAttribute('data-fit').split(':');
+    const f=(typeof fitEntry==='function')&&fitEntry(slot,id); if(!f) return;
+    const lock=fitLock(f);
+    const cur=(fit.tint&&fit.tint[slot]!==undefined)?fit.tint[slot]:null;
+    const sel=(f.tint==null&&cur===null)||(f.tint!=null&&cur===f.tint);
+    paint(el,sel,!lock.ok, lock.ok
+      ? (f.tier==='earned'?'Earned — '+f.why:f.tier==='cash'?'Owned':'Comes with the character')
+      : (f.tier==='earned'?'Locked — '+lock.why:'Tap to buy — '+lock.why));
+  });
+  document.querySelectorAll('#sheetBody [data-cut]').forEach(el=>{
+    const [slot,id]=el.getAttribute('data-cut').split(':');
+    const c=(typeof cutEntry==='function')&&cutEntry(slot,id); if(!c) return;
+    const lock=fitLock(c), worn=currentCut(slot);
+    paint(el,!!(worn&&worn.id===c.id),!lock.ok,
+      lock.ok?(c.tier==='free'?'Comes with the character':'Owned')
+             :'Tap to buy — '+lock.why);
+  });
+}
+
 /* Re-applies body + fit to the preview model in place. Cheap enough to call
    on every slider input because it only writes bone scales and material
    colours -- nothing is reloaded. */
@@ -630,6 +670,20 @@ function refreshCharPreview(){
   root.scale.setScalar(4.0/hh);
   if(typeof applyBodyShape==='function') applyBodyShape(target, ch.body);
   if(charPrev.vrm&&typeof applyVRMFit==='function') applyVRMFit(charPrev.vrm, ch.fit);
+  /* The wardrobe, live. Only the GLB character can wear cuts (a VRM has its
+     own skeleton and its garments are baked into the export). applyCuts()
+     re-dresses IN PLACE on the model already on screen, so changing a cut
+     repaints the preview rather than reloading it -- which is the whole point
+     of the preview being live. */
+  if(charPrev.plain&&typeof applyCuts==='function')
+    applyCuts(charPrev.plain, ch.fit, changed=>{
+      /* A newly worn garment binds to the LIVE skeleton, so it inherits the
+         body dials for free -- but it does change the model's bind-pose
+         bounds, which is what the 4-unit normalisation above measures. Only a
+         real cut change is worth redoing that, and `changed` is false on the
+         re-tint path this function takes on every slider input. */
+      if(changed&&charPrev) refreshCharPreview();
+    });
 }
 
 /* The dials. Ranges are deliberately narrow: these scale a real skeleton, and
@@ -710,18 +764,44 @@ function openCharacter(){
      slots. Deliberately honest about the limit rather than pretending: with
      one .vrm you get colourways, because the CUT of a garment is baked into
      the mesh by VRoid and only a different export can change it. */
-  if(ch.type==='preset'||ch.type==='custom'){
+  {
+    const isVRM=(ch.type==='preset'||ch.type==='custom');
     const fit=(S.person.character&&S.person.character.fit)||{hide:{},tint:{}};
     const catReady=typeof DRIP_FITS!=='undefined';
     html+='<div class="tkh">THE FIT</div>';
     if(!catReady){
       html+='<div class="tkdone">Still loading — reopen this in a second.</div>';
     } else {
-      html+='<div class="note">Colours apply the next time you ENTER. Different '+
-        '<b>cuts</b> — oversized, franela, baggy — are separate .vrm exports, not '+
-        'colours; add one and it shows up here as its own option.</div>';
+      html+='<div class="note">'+(isVRM
+        ? 'Colours change in the preview as you tap them. A different <b>cut</b> '+
+          'on a VRM body is a separate .vrm export, not a colour — VRoid bakes '+
+          'the shape into the mesh — so the cut rows are on the original '+
+          'character.'
+        : 'Everything here changes in the preview as you tap it, and carries '+
+          'into the world on your next ENTER.')+'</div>';
+      /* THE CUT. Real garment shapes, not one silhouette recoloured -- each is
+         a part of the same CC0 Quaternius rig the character is (see
+         GARMENT_PARTS in models.js). Only the GLB character can wear them. */
+      if(!isVRM&&typeof DRIP_CUTS!=='undefined'){
+        CUT_SLOTS.forEach(slot=>{
+          html+='<div class="tkh">'+{top:'TOP — CUT',bottom:'BOTTOM — CUT'}[slot]+'</div>';
+          const worn=currentCut(slot);
+          (DRIP_CUTS[slot]||[]).forEach(c=>{
+            const lock=fitLock(c), sel=worn&&worn.id===c.id;
+            const cue = lock.ok
+              ? (c.tier==='free'?'Comes with the character':'Owned')
+              : 'Tap to buy — '+lock.why;
+            html+='<div class="row'+(sel?' done':'')+(lock.ok?'':' lk')+'" '+
+              'data-cut="'+slot+':'+c.id+'">'+
+              '<div class="ck">'+(sel?'✓':'')+'</div>'+
+              '<div class="nm">'+c.name+'<span class="cue">'+cue+'</span></div></div>';
+          });
+        });
+      }
       FIT_SLOTS.forEach(slot=>{
-        const label={hair:'HAIR',top:'TOP',bottom:'BOTTOM',shoes:'SHOES'}[slot];
+        if(!isVRM&&(slot==='hair'||slot==='shoes')) return;   // no cut/slot for these yet
+        const label={hair:'HAIR',top:'TOP — COLOUR',bottom:'BOTTOM — COLOUR',
+                     shoes:'SHOES'}[slot];
         html+='<div class="tkh">'+label+'</div>';
         (DRIP_FITS[slot]||[]).forEach(f=>{
           const lock=fitLock(f);
@@ -780,9 +860,29 @@ function openCharacter(){
         toast('Bought '+f.name);
       }
       const c=S.person.character;
-      c.fit=c.fit||{hide:{},tint:{}}; c.fit.tint=c.fit.tint||{};
+      c.fit=c.fit||{hide:{},tint:{},cut:{}}; c.fit.tint=c.fit.tint||{};
       if(f.tint==null) delete c.fit.tint[slot]; else c.fit.tint[slot]=f.tint;
-      save(); openCharacter();   // rebuilds the sheet, which restarts the preview
+      save(); repaintFitRows(); refreshCharPreview();
+    });
+  });
+  /* Cut rows. Same shape as the colour rows above, and deliberately the same
+     lock/buy path (fitLock/buyFit read .tier/.price/.need and nothing else),
+     so a cut and a colourway cannot disagree about what a gate means. */
+  document.querySelectorAll('#sheetBody [data-cut]').forEach(el=>{
+    bindTap(el,()=>{
+      const parts=el.getAttribute('data-cut').split(':');
+      const slot=parts[0], c=cutEntry(slot,parts[1]);
+      if(!c) return;
+      const lock=fitLock(c);
+      if(!lock.ok){
+        if(c.tier!=='cash'){ toast('Not yet — '+c.why); return; }
+        if(!buyFit(c)){ toast('Short by 💵'+(c.price-S.cash).toLocaleString()); return; }
+        toast('Bought '+c.name);
+      }
+      const ch=S.person.character;
+      ch.fit=ch.fit||{hide:{},tint:{},cut:{}}; ch.fit.cut=ch.fit.cut||{};
+      ch.fit.cut[slot]=c.id;
+      save(); repaintFitRows(); refreshCharPreview();
     });
   });
   document.querySelectorAll('#sheetBody [data-char]').forEach(el=>{
