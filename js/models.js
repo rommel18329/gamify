@@ -621,43 +621,91 @@ function vrmWear(hostVrm,donorVrm,slot){
    1.0 = unchanged. */
 const VRM_BODY_DEFAULT={height:1,build:1,shoulders:1,legs:1,arms:1,head:1};
 
-function applyVRMBody(vrm,body){
-  if(!vrm||!vrm.humanoid) return;
-  const b=Object.assign({},VRM_BODY_DEFAULT,body||{});
-  const R=n=>vrm.humanoid.getRawBoneNode(n);
-  const set=(n,x,y,z)=>{ const o=R(n); if(o) o.scale.set(x,y,z); };
+/* Resolves a humanoid bone name against WHATEVER rig it is handed. The
+   builder has to work on the default Quaternius character as well as on a
+   VRM, because the single-file build ships no bundled .vrm at all (it is
+   ~14MB, well past the artifact size cap) -- so on the published build the
+   player HAS no VRM, and a builder that only shaped VRMs was a builder that
+   did nothing at all there. Both rigs are already mapped to each other for
+   the walk-cycle retargeting, so VRM_SRC_OF is reused rather than inventing a
+   second bone table that could drift from it. */
+function bodyBones(target){
+  if(!target) return null;
+  if(target.humanoid&&target.humanoid.getRawBoneNode){
+    // a VRM: RAW bones only -- the normalized rig carries rotations, not scale
+    return n=>target.humanoid.getRawBoneNode(n);
+  }
+  const root=target.scene||target;
+  if(!root||!root.traverse) return null;
+  const byName={};
+  root.traverse(function(o){ if(o.isBone) byName[o.name]=o; });
+  return n=>{ const src=VRM_SRC_OF[n]; return src?(byName[src]||null):null; };
+}
+function bodyRoot(target){
+  return (target&&target.scene)?target.scene:target;
+}
 
-  // torso girth: spine and chest thicken across and front-to-back, never up
+/* Reshapes a character by scaling its skeleton. Works on a VRM or on the
+   default GLB rig -- see bodyBones() above.
+
+   Scaling exists because a VRoid export ships NO shape morphs: all 56 of its
+   morph targets are `Fcl_*` EXPRESSIONS (blink, joy, the vowels), verified by
+   reading the file. Bones are the only handle on proportion there is.
+
+   TWO things were measured before this worked:
+
+   1. On a VRM, scale must go on the **RAW** bones. three-vrm's normalized
+      humanoid rig is a parallel skeleton that only carries ROTATIONS across to
+      the real one, so any scale written there is silently dropped -- three
+      differently "scaled" bodies all came back exactly 1.613 units tall with
+      identical vertex positions.
+   2. `Box3.setFromObject` CANNOT verify any of this. It transforms the
+      geometry's BIND-POSE bounds by the world matrix, so a reshaped skinned
+      mesh reports an identical box every time. Sample a real vertex through
+      `applyBoneTransform` instead (the same trap the garment transplant hit).
+
+   Scaling a bone scales everything BELOW it, so each dial counter-scales its
+   own children: widening the chest would otherwise stretch the arms sideways
+   with it, and thickening the torso would inflate the head. Every dial is
+   1.0 = unchanged. */
+function applyBodyShape(target,body){
+  const B=bodyBones(target);
+  if(!B) return false;
+  const b=Object.assign({},VRM_BODY_DEFAULT,body||{});
+  const set=(n,x,y,z)=>{ const o=B(n); if(o) o.scale.set(x,y,z); };
+
   set('spine', b.build,1,b.build);
   set('chest', b.shoulders,1,1);
 
-  /* Counter-scale the things hanging off the torso so they keep their own
-     proportions: without this, a broad-shouldered character gets wide arms
-     and a heavy one gets a fat head. */
-  const neckX=1/(b.build), neckZ=1/(b.build);
-  set('neck', neckX/(b.shoulders),1,neckZ);
+  /* Counter-scale what hangs off the torso so it keeps its own proportions:
+     without this a broad-shouldered character gets wide arms and a heavy one
+     gets a fat head. */
+  set('neck', 1/(b.build*b.shoulders),1,1/b.build);
   const shX=1/(b.shoulders*b.build), shZ=1/b.build;
   set('leftShoulder', shX,1,shZ);
   set('rightShoulder',shX,1,shZ);
 
-  // limb length runs along each bone's own local Y
   set('leftUpperArm', 1,b.arms,1);
   set('rightUpperArm',1,b.arms,1);
   set('leftUpperLeg', 1,b.legs,1);
   set('rightUpperLeg',1,b.legs,1);
-  // hands and feet shouldn't stretch with the limb they hang off
   const invA=1/b.arms, invL=1/b.legs;
-  set('leftHand', 1,invA,1); set('rightHand',1,invA,1);
-  set('leftFoot', 1,invL,1); set('rightFoot',1,invL,1);
+  set('leftHand',1,invA,1); set('rightHand',1,invA,1);
+  set('leftFoot',1,invL,1); set('rightFoot',1,invL,1);
 
-  set('head', b.head/(b.build),b.head,b.head/(b.build));
+  set('head', b.head/b.build,b.head,b.head/b.build);
 
-  /* Overall height is the one dial that does NOT go through the skeleton --
-     it scales the whole scene, which cannot distort anything and cannot fight
-     the retargeter. loadVRM() has already normalised this model to the world's
-     4-unit person, so this multiplies that. */
-  vrm.scene.scale.multiplyScalar(b.height);
+  /* Height is the one dial that does NOT go through the skeleton: it scales
+     the whole model, which cannot distort anything and cannot fight the
+     retargeter. Both loaders have already normalised to the world's 4-unit
+     person, so this multiplies that. */
+  const root=bodyRoot(target);
+  if(root) root.scale.multiplyScalar(b.height);
+  return true;
 }
+
+/* Kept as the VRM-shaped name the rest of the code already calls. */
+function applyVRMBody(vrm,body){ return applyBodyShape(vrm,body); }
 
 /* Applies a saved fit record to a freshly-loaded character. The record is
    small and plain -- {hide:{top:1}, tint:{hair:1644825}} -- because it lives

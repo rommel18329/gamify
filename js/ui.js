@@ -481,6 +481,13 @@ function disposeCharPreview(){
   try{
     if(charPrev.raf) cancelAnimationFrame(charPrev.raf);
     if(charPrev.vrm&&typeof unregisterVRM==='function') unregisterVRM(charPrev.vrm);
+    /* The GLB preview registers a mixer in ANIMATED; leaving it there would
+       keep ticking a character that is no longer in any scene. */
+    if(charPrev.plain&&charPrev.plain.userData&&charPrev.plain.userData.mixer
+       &&typeof ANIMATED!=='undefined'){
+      const i=ANIMATED.indexOf(charPrev.plain.userData.mixer);
+      if(i>=0) ANIMATED.splice(i,1);
+    }
     if(charPrev.renderer){ charPrev.renderer.dispose();
       /* forceContextLoss() is what actually hands the GPU context back; a bare
          dispose() leaves it allocated until GC gets round to it, and the limit
@@ -515,7 +522,9 @@ function startCharPreview(){
 
   const cam=new THREE.PerspectiveCamera(32,w/h,.1,60);
   const rig=new THREE.Group(); scene.add(rig);
-  charPrev={renderer,scene,cam,rig,vrm:null,raf:0,spin:0,host};
+  /* spin starts at 0 so the FIRST frame is the character facing the camera --
+   the rotation is there to show the back, not to open on it. */
+  charPrev={renderer,scene,cam,rig,vrm:null,plain:null,raf:0,spin:0,host};
 
   const ch=(S.person&&S.person.character)||{type:'default'};
   const onReady=(vrm)=>{
@@ -546,8 +555,27 @@ function startCharPreview(){
   } else if(ch.type==='custom'&&typeof loadCustomVRM==='function'){
     loadCustomVRM(onReady,()=>{});
   } else {
-    host.innerHTML='<div class="tkdone">Pick a VRM character below to see it here.</div>';
-    disposeCharPreview(); return;
+    /* DEFAULT CHARACTER. The published single-file build ships no bundled
+       .vrm at all (~14MB, past the artifact size cap), so on a phone this is
+       the ONLY character that exists -- a preview that refused to draw
+       anything without a VRM was a builder that did nothing there. The
+       Quaternius rig has a real skeleton and the body dials drive it through
+       the same bone map the walk retargeting already uses. */
+    if(typeof loadAssets!=='function'||typeof modelPerson!=='function'){
+      host.innerHTML='<div class="tkdone">Still loading — reopen this in a second.</div>';
+      return;
+    }
+    loadAssets(()=>{
+      if(!charPrev) return;               // sheet closed while it loaded
+      const who=(typeof dripFit==='function')
+        ? dripFit((homePlot&&homePlot().upgrades.drip)||{})
+        : (typeof FITS!=='undefined'?FITS[0]:{});
+      const g=modelPerson(who)||(typeof makePerson==='function'?makePerson(who):null);
+      if(!g){ host.innerHTML='<div class="tkdone">No character to preview.</div>'; return; }
+      charPrev.plain=g; rig.add(g);
+      if(typeof setAnim==='function') setAnim(g,'idle');
+      refreshCharPreview();
+    });
   }
 
   const tick=()=>{
@@ -555,6 +583,14 @@ function startCharPreview(){
     charPrev.raf=requestAnimationFrame(tick);
     charPrev.spin+=.006;
     rig.rotation.y=charPrev.spin;
+    if(charPrev.plain){
+      // the GLB rig animates through its own mixer, exactly as in the world
+      if(typeof updateAnimated==='function') updateAnimated(1/60);
+      const box=new THREE.Box3().setFromObject(charPrev.plain);
+      const hh=Math.max(box.max.y-box.min.y,.001);
+      cam.position.set(0,hh*.52,hh*1.85);
+      cam.lookAt(0,hh*.49,0);
+    }
     if(charPrev.vrm){
       /* Drive the retargeter, THEN vrm.update(). Calling update() alone leaves
          the character in its bind pose -- a dead T-pose with the arms straight
@@ -579,14 +615,21 @@ function startCharPreview(){
    on every slider input because it only writes bone scales and material
    colours -- nothing is reloaded. */
 function refreshCharPreview(){
-  if(!charPrev||!charPrev.vrm) return;
+  if(!charPrev) return;
   const ch=(S.person&&S.person.character)||{};
-  charPrev.vrm.scene.scale.setScalar(1);
-  const box=new THREE.Box3().setFromObject(charPrev.vrm.scene);
+  const target=charPrev.vrm||charPrev.plain;
+  if(!target) return;
+  const root=charPrev.vrm?charPrev.vrm.scene:charPrev.plain;
+  /* Re-normalise from scratch each time. applyBodyShape()'s height dial
+     MULTIPLIES the model's scale, so re-applying it on top of an already
+     scaled model would compound on every slider move and the character would
+     walk off toward zero or infinity as you dragged. */
+  root.scale.setScalar(1);
+  const box=new THREE.Box3().setFromObject(root);
   const hh=Math.max(box.max.y-box.min.y,.001);
-  charPrev.vrm.scene.scale.setScalar(4.0/hh);      // same normalisation loadVRM does
-  applyVRMBody(charPrev.vrm, ch.body);
-  if(typeof applyVRMFit==='function') applyVRMFit(charPrev.vrm, ch.fit);
+  root.scale.setScalar(4.0/hh);
+  if(typeof applyBodyShape==='function') applyBodyShape(target, ch.body);
+  if(charPrev.vrm&&typeof applyVRMFit==='function') applyVRMFit(charPrev.vrm, ch.fit);
 }
 
 /* The dials. Ranges are deliberately narrow: these scale a real skeleton, and
@@ -638,13 +681,14 @@ function openCharacter(){
     '</span></div></div>';
   html+='<input type="file" id="vrmFileInput" accept=".vrm" style="display:none">';
 
-  /* BODY. Only meaningful on a VRM, because it reshapes a real skeleton —
-     the default primitive character has no humanoid rig to scale. */
-  if(ch.type==='preset'||ch.type==='custom'){
+  /* BODY. Shown for EVERY character, not just a VRM: the default Quaternius
+     rig has a real skeleton too, and on the published single-file build it is
+     the only character there is (no .vrm is bundled — see build_single.js). */
+  {
     const bd=Object.assign({height:1,build:1,shoulders:1,legs:1,arms:1,head:1},
                            (S.person.character&&S.person.character.body)||{});
     html+='<div class="tkh">BODY</div>';
-    if(typeof applyVRMBody!=='function'){
+    if(typeof applyBodyShape!=='function'){
       html+='<div class="tkdone">Still loading — reopen this in a second.</div>';
     } else {
       html+='<div class="note">Drag to reshape. Takes effect on the preview '+

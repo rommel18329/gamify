@@ -767,6 +767,19 @@ run on iPhone** (Windows, macOS and iPad only — VRoid *Mobile* is a different
 app that dresses up existing characters and cannot export VRM), so a
 phone-only owner otherwise has no way to shape a character at all.
 
+**It works on EVERY character, not just a VRM.** The single-file build ships
+no bundled `.vrm` at all — it is ~14 MB, well past the artifact size cap, so
+`build_single.js` replaces `VRM_PRESETS` with `{}`. On the published build the
+player therefore *has* no VRM, and a builder that only shaped VRMs was a
+builder that did nothing at all there. `applyBodyShape(target, body)` resolves
+bones through `bodyBones()`, which handles both: a VRM through
+`humanoid.getRawBoneNode()`, and the default Quaternius rig by name through
+`VRM_SRC_OF` — the same bone map the walk-cycle retargeting already uses,
+reused rather than duplicated so the two cannot drift apart. `applyVRMBody()`
+remains as a thin alias. In `game.js`, `loadPlayerBody()` shapes the default
+rig via `shapeDefaultBody()` before it returns, and reshapes again after a VRM
+swap.
+
 **Shape comes from scaling the SKELETON, because a VRoid export ships no shape
 morphs.** All 56 of its morph targets are `Fcl_*` *expressions* (blink, joy,
 the vowels) — verified by reading the file, not assumed. Bones are the only
@@ -800,6 +813,11 @@ spring bones and a large head scale makes it spike.
 **Order matters in `loadPlayerBody()`:** body → rebuild retargeter → fit.
 `makeVRMRetargeter()` measures its rest directions from the skeleton, so a
 retargeter built before the bones were scaled is aligned to the wrong body.
+
+`refreshCharPreview()` re-normalises the model from scale 1 every time before
+re-applying the dials: the `height` dial MULTIPLIES the model's scale, so
+re-applying it on top of an already-scaled model compounds on every slider
+move and the character shrinks or grows away as you drag.
 
 **The preview is the only WebGL context outside the world**, and it is created
 only when the sheet is actually opened — the title screen still renders with
