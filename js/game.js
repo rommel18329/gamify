@@ -2377,10 +2377,22 @@ function buildPlayer(){
    never a broken world. Character selection happens from the TITLE screen
    (openCharacter() in ui.js), so this only ever needs to run once per
    enterWorld() — there is no live in-world swap to support. */
+/* Shapes whatever body the player ended up with. buildPlayer() has just built
+   the default character synchronously; if a VRM is coming it will be reshaped
+   again after the swap, but the default rig has to be shaped HERE or the body
+   dials do nothing at all for a player who has no .vrm -- which on the
+   published single-file build is every player, since no .vrm is bundled. */
+function shapeDefaultBody(){
+  if(typeof applyBodyShape!=='function'||!playerGroup) return;
+  const ch=(S.person&&S.person.character)||{};
+  if(!ch.body) return;
+  applyBodyShape(playerGroup, ch.body);
+}
+
 function loadPlayerBody(){
   if(typeof loadVRM!=='function') return;
   const ch=(S.person&&S.person.character)||{type:'default'};
-  if(ch.type==='default') return;
+  if(ch.type==='default'){ shapeDefaultBody(); return; }
   const spawnPos=playerGroup.position.clone(), spawnYaw=playerGroup.rotation.y;
   const swap=(vrm)=>{
     if(!scene||!playerGroup) return;   // backToTitle() ran before this resolved
