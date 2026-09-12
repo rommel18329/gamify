@@ -72,7 +72,8 @@ js/carphysics.js     from-scratch car physics engine (no THREE, no DOM) — the
 js/models.js         loads the CC0 rigged characters + car, recolours them into
                      outfits, drives their animation mixers; also VRM loading,
                      see "VRM characters"
-assets/              CC0 model files (characters/*.glb, vehicles/*.obj+mtl);
+assets/              CC0 rigged characters (characters/*.glb); there is no
+                     vehicle model — the car is procedural, see "The car";
                      assets/characters/vrm/ holds the one bundled VRM preset
 js/game.js           the 3D scene: world building (one function per structure —
                      buildHouse/buildGarage/buildColmado/etc., all called from
@@ -596,14 +597,21 @@ before assuming the backstop itself is broken.
 
 ## Models (`js/models.js`, `assets/`)
 
-People and the car are real rigged models: Quaternius "Ultimate Modular Men"
-(**CC0 1.0**, verified from the pack's own `License.txt` — no attribution
-required) plus a CC0 car. The hand-built `makePerson()`/`makeCar()` primitives
-are still there as a **fallback**: every call site is
-`modelPerson(...)||makePerson(...)`, and `loadAssets()` always fires its
-callback even when a download fails, so a broken asset costs you the good
-characters — never a black screen or a hung loading screen. Don't remove that
-fallback path.
+People are real rigged models: Quaternius "Ultimate Modular Men" (**CC0 1.0**,
+verified from the pack's own `License.txt` — no attribution required). The
+hand-built `makePerson()` primitives are still there as a **fallback**: every
+call site is `modelPerson(...)||makePerson(...)`, and `loadAssets()` always
+fires its callback even when a download fails, so a broken asset costs you the
+good characters — never a black screen or a hung loading screen. Don't remove
+that fallback path.
+
+**The car is not a download at all** — see "The car" below. `loadAssets()` no
+longer fetches a vehicle, so `modelCar()` finds no `ASSETS.car` and the
+`modelCar()||makeCar()` call site falls through to the procedural one every
+time. `modelCar()` is kept intact and working: drop a vehicle `.obj` back into
+`loadAssets()` and it takes over again with no other change (it would also
+need a `parse()` substitution in `tools/build_single.js`, like the characters
+have — a `data:` URI is refused by `connect-src`).
 
 Three things bite here, all of them already fixed once:
 
@@ -821,6 +829,101 @@ Four more things bite here, all found by measuring rather than assumed:
   (`ud.legL.rotation.x=...`), which reaches for `userData` fields only
   `makePerson()` ever sets and would throw on any VRM character. Keep that
   true even in the fallback path where no source rig was available.
+
+### The car
+
+A **1996–2000 Civic EK three-door hatchback**, built from primitives in
+`makeCar()`. Shape only — no badge, no maker's mark, no model lettering
+anywhere on it, for exactly the reason the colmado signage is generic: a
+silhouette is not a trademark, a logo is.
+
+**The body is ONE EXTRUDED SIDE PROFILE, not an assembly of boxes.** The first
+attempt built the screen, roof and hatch as separate rotated slabs and they
+rendered as loose panels hovering over a flatbed — there was no continuous
+surface anywhere, because there wasn't one. A car's identity lives in an
+unbroken side outline (cowl → screen rake → roof → hatch fall), so the outline
+is defined once as a `THREE.Shape` and swept across the width with
+`ExtrudeGeometry`. Two consequences worth knowing:
+
+- `ExtrudeGeometry` builds in local XY and sweeps along local +Z, so the mesh
+  is rotated `-Math.PI/2` about Y to put the profile nose-to-tail along world
+  Z and the sweep across world X. Nose stays along **+Z** like every other
+  representation of this car (the cannon.js chassis `Box`, the collider), so
+  there is still no rotation offset anywhere — see what a stray one cost under
+  Car physics.
+- **The wheel arches are part of the profile**, not stuck on. The bottom edge
+  of the outline lifts over each wheel. An earlier version drew them as black
+  boxes on the flank and the car looked like it was hovering above four loose
+  tyres.
+- **Glass panes ride the same vertices the profile uses.** They were left on
+  pre-arch coordinates once and the hatch glass sat a third of its own length
+  short of the glass line.
+
+The proportions are the real car's, not taste: 4.18 m long, 1.70 wide, 1.36
+tall on a 2.62 m wheelbase — against this world's fixed 4-unit person that is
+2.4 : 0.97 : 0.78 with the wheelbase at 1.5× person height. `CAR_LENGTH`
+(9.6) already sits on that 2.4× figure, which is why the profile is laid out
+at 4.7 and scaled once at the end. `CAR_LENGTH` remains the single source of
+truth. The tail falls steeply to a near-vertical panel: a gradual taper there
+reads as a notchback saloon, which is the wrong car entirely.
+
+`carExtras()` still runs on it, so every garage mod (wheels, tint, tune,
+spoiler, underglow, plate) remains visible exactly as before.
+
+## Environment geometry
+
+Everything in the world is procedural — there is no downloaded environment
+asset. A few pieces are worth knowing because each replaced something that
+read badly for a specific, diagnosable reason:
+
+- **Palms** (`buildPalms`) are coconut palms: a leaning trunk of stacked
+  segments each tipping a little further over, ring scars at the joints, an
+  arcing frond crown and a coconut cluster. The lean matters — a vertical palm
+  reads as a lamp post with leaves on. Fronds come from `frondArc()`, a chain
+  of flattened tapering segments each rotated further down, so the blade arcs.
+  The old fronds were **round cones fanned off a single point**, which reads
+  as a bottle brush from every angle; flat-and-drooping is the entire
+  difference between a palm and a spike.
+- **Trees** (`buildFoliage`) mix three species across the block — spreading,
+  branched, and the flamboyán (flat umbrella canopy, red bloom) that is
+  everywhere in Santo Domingo. Twenty copies of one shape read as wallpaper;
+  the eye catches repetition long before it catches polygon count. The old
+  tree stacked three same-size blobs in a vertical column, which read as
+  broccoli.
+- **Streetlights** (`buildStreetLights`) are leaning wood poles with a
+  crossarm, insulators, a bracket lamp and drop lines. The old version was a
+  bare tapered post with **no lamp head at all** — the light came entirely
+  from separate glowing spheres strung between posts, so the post itself read
+  as a fence stake. The strung bulb line is kept: it is what actually lights
+  the domino table at night.
+- **Placeholder buildings** (`buildPlaceholders`) mix three fronts —
+  punched openings, a Dominican street front (roll shutter, awning, barred
+  upper windows, rooftop tinaco, rebar stubs), and stepped masses with a stair
+  tower. They deliberately speak the same vocabulary `buildHouse()`/
+  `buildColmado()` already use, so they belong to the street rather than
+  looking imported.
+- **`livedIn(parent, opts)`** hangs the stuff that says people live here on a
+  building — split AC unit, electricity meter and its service drop, a laundry
+  line with washing on it, potted plants. It takes a parent and plot-LOCAL
+  coordinates, **never `S` and never a plot record**, so a neighbour's house
+  gets the same treatment from the same call (see the PLOTS rules).
+- **Fence** tier 2+ sets broken bottle glass into the capping course — the
+  cheap deterrent on half the walls in the barrio, and the one detail that
+  says what the wall is *for*.
+- **Street signs** carry a drop shadow on the lettering, a bracket, bolts and
+  a PARE plate below. A solid backer plate was tried behind the lettering and
+  removed: it rendered over the text and both signs came out blank.
+
+All the small repeated pieces here (fronds, shards, wires, bars, ribs) pass
+`{ink:false}` — an outline on each of a few dozen adjacent slivers reads as
+noise and doubles the mesh count for nothing.
+
+**Cost, measured:** this roughly doubled the scene, 1,298 → 2,762 meshes, for
+104 → 159 draw calls and 7.4k → 12.3k triangles. Under headless SwiftShader
+(CPU rendering, not representative of a phone GPU) that moved frame time
+46.9 ms → 54.5 ms, ~14% for 2.1× the meshes. If that budget ever gets tight,
+the cheap dials are the palm count and frond segments, the `livedIn()` laundry
+line, and the streetlight drop-line bundle — in that order.
 
 ## Rendering conventions (anime/toon look)
 

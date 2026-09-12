@@ -117,15 +117,13 @@ function loadAssets(done){
       ()=>finish());   // missing character -> primitive fallback, not a crash
   });
 
-  if(typeof THREE.MTLLoader==='function'&&typeof THREE.OBJLoader==='function'){
-    const dir=ASSET_BASE+'vehicles/';
-    new THREE.MTLLoader().setPath(dir).load('NormalCar1.mtl',
-      mats=>{
-        mats.preload();
-        new THREE.OBJLoader().setMaterials(mats).setPath(dir)
-          .load('NormalCar1.obj', o=>{ ASSETS.car=o; finish(); }, undefined, ()=>finish());
-      }, undefined, ()=>finish());
-  } else finish();
+  /* No car model is downloaded any more. The car is the Civic EK hatchback
+     built by makeCar() in game.js, which is procedural like everything else in
+     this world -- so modelCar() simply finds no ASSETS.car and the
+     modelCar()||makeCar() call site falls through to it. modelCar() itself is
+     kept intact and working: drop a vehicle .obj back into loadAssets() and it
+     takes over again with no other change. */
+  finish();
 }
 
 /* ---- characters ---- */

@@ -66,8 +66,6 @@ window.VRMUtils = __VRM__.VRMUtils;
 const rawB64 = p => fs.readFileSync(path.join(ROOT, p)).toString('base64');
 const hoodieB64 = rawB64('assets/characters/Casual_Hoodie.glb');
 const casualB64 = rawB64('assets/characters/Casual_2.glb');
-const mtlB64 = rawB64('assets/vehicles/NormalCar1.mtl');
-const objB64 = rawB64('assets/vehicles/NormalCar1.obj');
 
 let models = R('js/models.js');
 const sub = (old, neu, what) => {
@@ -78,8 +76,7 @@ sub(`const CHAR_MODELS={ hoodie:'characters/Casual_Hoodie.glb', casual:'characte
 `function __b64buf(s){ const b=atob(s), u=new Uint8Array(b.length);
   for(let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u.buffer; }
 function __b64txt(s){ return new TextDecoder().decode(new Uint8Array(__b64buf(s))); }
-const CHAR_MODELS={ hoodie:${JSON.stringify(hoodieB64)}, casual:${JSON.stringify(casualB64)} };
-const __CAR_MTL=${JSON.stringify(mtlB64)}, __CAR_OBJ=${JSON.stringify(objB64)};`,
+const CHAR_MODELS={ hoodie:${JSON.stringify(hoodieB64)}, casual:${JSON.stringify(casualB64)} };`,
     'CHAR_MODELS');
 
 sub(`    gl.load(ASSET_BASE+CHAR_MODELS[n],
@@ -93,20 +90,11 @@ sub(`    gl.load(ASSET_BASE+CHAR_MODELS[n],
     }catch(e){ finish(); }   // bad asset -> primitive fallback, not a crash`,
     'character parse');
 
-sub(`    const dir=ASSET_BASE+'vehicles/';
-    new THREE.MTLLoader().setPath(dir).load('NormalCar1.mtl',
-      mats=>{
-        mats.preload();
-        new THREE.OBJLoader().setMaterials(mats).setPath(dir)
-          .load('NormalCar1.obj', o=>{ ASSETS.car=o; finish(); }, undefined, ()=>finish());
-      }, undefined, ()=>finish());`,
-`    try{
-      const mats=new THREE.MTLLoader().parse(__b64txt(__CAR_MTL), '');
-      mats.preload();
-      ASSETS.car=new THREE.OBJLoader().setMaterials(mats).parse(__b64txt(__CAR_OBJ));
-      finish();
-    }catch(e){ finish(); }`,
-    'vehicle parse');
+/* No vehicle substitution any more: the car is the Civic EK hatchback that
+   makeCar() builds from primitives in game.js, so there is no .obj to inline
+   and nothing here to rewrite. If a vehicle model is ever added back to
+   loadAssets(), it needs a parse() substitution here exactly like the
+   characters above -- a data: URI would be refused by connect-src. */
 
 /* The bundled VRM preset (15MB) is NOT embedded -- base64 alone pushes it
    past the artifact host's 16MB cap on its own. VRM_PRESETS ships empty
