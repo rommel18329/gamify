@@ -1311,11 +1311,23 @@ const DRIP_CUTS={
     {id:'cut_baggy',   name:'Baggy pants',   tier:'cash', price:420, part:'baggy'}
   ],
   hair:[
-    {id:'hair_c_stock', name:'Short curls',  tier:'free', part:'hair_stock'},
-    {id:'hair_c_waves', name:'Waves',        tier:'cash', price:150, part:'hair_waves'},
-    {id:'hair_c_fade',  name:'Side part',    tier:'cash', price:150, part:'hair_fade'},
-    {id:'hair_c_long',  name:'Long + beard', tier:'cash', price:260, part:'hair_long'},
-    {id:'hair_c_mohawk',name:'Mohawk',       tier:'earned', part:'hair_mohawk', need:{streak:14},
+    /* The first nine are DERIVED from the character's own head (see HAIR_CAPS
+       in models.js) — no download, and they fit any head. The rest are real
+       meshes out of the Quaternius pack. */
+    {id:'hair_c_stock',  name:'Short curls',    tier:'free', part:'hair_stock'},
+    {id:'hair_c_bald',   name:'Bald',           tier:'free', part:'hair_bald'},
+    {id:'hair_c_buzz',   name:'Buzz',           tier:'free', part:'hair_buzz'},
+    {id:'hair_c_lowfade',name:'Low fade',       tier:'cash', price:150, part:'hair_lowfade'},
+    {id:'hair_c_taper',  name:'Taper fade',     tier:'cash', price:150, part:'hair_taper'},
+    {id:'hair_c_curls',  name:'Curls',          tier:'cash', price:150, part:'hair_curls'},
+    {id:'hair_c_curlfade',name:'Curly fade',    tier:'cash', price:200, part:'hair_curlfade'},
+    {id:'hair_c_coils',  name:'Coils',          tier:'cash', price:200, part:'hair_coils'},
+    {id:'hair_c_afro',   name:'Afro',           tier:'cash', price:240, part:'hair_afro'},
+    {id:'hair_c_hightop',name:'High-top fade',  tier:'cash', price:260, part:'hair_hightop'},
+    {id:'hair_c_waves',  name:'Waves',          tier:'cash', price:150, part:'hair_waves'},
+    {id:'hair_c_fade',   name:'Side part',      tier:'cash', price:150, part:'hair_fade'},
+    {id:'hair_c_long',   name:'Long + beard',   tier:'cash', price:260, part:'hair_long'},
+    {id:'hair_c_mohawk', name:'Mohawk',         tier:'earned', part:'hair_mohawk', need:{streak:14},
        why:'a 14-day streak, ever'}
   ]
 };

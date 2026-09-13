@@ -506,7 +506,15 @@ function startCharPreview(){
   const host=document.getElementById('charPrev');
   if(!host||!charPreviewReady()) return;
   disposeCharPreview();
-  const w=host.clientWidth||300, h=260;
+  /* Size from the host's real box, not a guess. The sheet has not been laid
+     out when this runs, so clientWidth is 0 and the old `||300` fallback
+     rendered a 300x260 buffer into a box that is neither — the character came
+     out squashed and small inside a letterboxed canvas. fitPreview() below
+     re-reads the box every frame and resizes when it actually changes, which
+     also covers rotating the phone. */
+  const hostBox=()=>{ const r=host.getBoundingClientRect();
+    return [Math.max(1,Math.round(r.width)||300), Math.max(1,Math.round(r.height)||240)]; };
+  const [w,h]=hostBox();
   /* preserveDrawingBuffer for the same measured reason the world's renderer
      sets it (see "The engine is ES modules now"): without it a headless
      toDataURL()/readPixels() of this canvas reads back empty even though the
@@ -530,7 +538,7 @@ function startCharPreview(){
   const rig=new THREE.Group(); scene.add(rig);
   /* spin starts at 0 so the FIRST frame is the character facing the camera --
    the rotation is there to show the back, not to open on it. */
-  charPrev={renderer,scene,cam,rig,vrm:null,plain:null,raf:0,spin:0,host};
+  charPrev={renderer,scene,cam,rig,vrm:null,plain:null,raf:0,spin:0,host,w:w,h:h};
 
   const ch=(S.person&&S.person.character)||{type:'default'};
   const onReady=(vrm)=>{
@@ -584,18 +592,37 @@ function startCharPreview(){
     });
   }
 
+  const fitPreview=()=>{
+    const [bw,bh]=hostBox();
+    if(bw===charPrev.w&&bh===charPrev.h) return;
+    charPrev.w=bw; charPrev.h=bh;
+    renderer.setSize(bw,bh,false);
+    cam.aspect=bw/bh; cam.updateProjectionMatrix();
+  };
+  /* Frame the measured silhouette: solve the distance that makes it fill the
+     vertical field of view, with a little margin so a wide Shoulders setting
+     still fits. charPrev.fit is measured in refreshCharPreview() through
+     applyBoneTransform — measuring it per frame would be far too costly. */
+  const frameTo=(root)=>{
+    const f=charPrev.fit;
+    let cy, hh;
+    if(f&&f.h>.001){ cy=f.cy; hh=f.h; }
+    else { const box=new THREE.Box3().setFromObject(root);
+      hh=Math.max(box.max.y-box.min.y,.001); cy=(box.max.y+box.min.y)/2; }
+    const d=(hh*0.5)/Math.tan(cam.fov*Math.PI/360)*1.12;
+    cam.position.set(0,cy,d);
+    cam.lookAt(0,cy,0);
+  };
   const tick=()=>{
     if(!charPrev) return;
     charPrev.raf=requestAnimationFrame(tick);
+    fitPreview();
     charPrev.spin+=.006;
     rig.rotation.y=charPrev.spin;
     if(charPrev.plain){
       // the GLB rig animates through its own mixer, exactly as in the world
       if(typeof updateAnimated==='function') updateAnimated(1/60);
-      const box=new THREE.Box3().setFromObject(charPrev.plain);
-      const hh=Math.max(box.max.y-box.min.y,.001);
-      cam.position.set(0,hh*.52,hh*1.85);
-      cam.lookAt(0,hh*.49,0);
+      frameTo(charPrev.plain);
     }
     if(charPrev.vrm){
       /* Drive the retargeter, THEN vrm.update(). Calling update() alone leaves
@@ -606,11 +633,7 @@ function startCharPreview(){
       const rt=charPrev.vrm.userData&&charPrev.vrm.userData.retarget;
       if(rt){ rt.setAnim('idle'); rt.update(1/60); }
       charPrev.vrm.update(1/60);
-      const box=new THREE.Box3().setFromObject(charPrev.vrm.scene);
-      const hh=Math.max(box.max.y-box.min.y,.001);
-      // pulled back enough that a wide Shoulders setting still fits the frame
-      cam.position.set(0,hh*.52,hh*1.85);
-      cam.lookAt(0,hh*.49,0);
+      frameTo(charPrev.vrm.scene);
     }
     renderer.render(scene,cam);
   };
@@ -672,11 +695,24 @@ function refreshCharPreview(){
      MULTIPLIES the model's scale, so re-applying it on top of an already
      scaled model would compound on every slider move and the character would
      walk off toward zero or infinity as you dragged. */
+  /* Pose the skeleton before measuring anything. Straight after a load the
+     mixer has not applied the idle clip yet, so the character is still in its
+     bind pose and every measurement below would be of that. */
+  if(charPrev.plain&&typeof updateAnimated==='function') updateAnimated(1/60);
   root.scale.setScalar(1);
-  const box=new THREE.Box3().setFromObject(root);
-  const hh=Math.max(box.max.y-box.min.y,.001);
+  const pb=(typeof posedBounds==='function')?posedBounds(root):null;
+  /* The REAL posed height, not Box3's bind-pose box — this rig's bind pose is
+     4.000 tall where the character standing there is 2.146, so normalising off
+     Box3 made the preview render at a bit over half the size it should. */
+  const hh=pb?Math.max(pb.height,.001)
+             :Math.max(new THREE.Box3().setFromObject(root).max.y-
+                       new THREE.Box3().setFromObject(root).min.y,.001);
   root.scale.setScalar(4.0/hh);
   if(typeof applyBodyShape==='function') applyBodyShape(target, ch.body);
+  /* Re-measure once the dials have been applied, and hand the camera a real
+     centre and height to frame instead of letting it guess from the box. */
+  const pb2=(typeof posedBounds==='function')?posedBounds(root):null;
+  charPrev.fit=pb2?{cy:pb2.mid,h:pb2.height}:null;
   if(charPrev.vrm&&typeof applyVRMFit==='function') applyVRMFit(charPrev.vrm, ch.fit);
   /* The wardrobe, live. Only the GLB character can wear cuts (a VRM has its
      own skeleton and its garments are baked into the export). applyCuts()
