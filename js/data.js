@@ -1315,6 +1315,11 @@ const DRIP_CUTS={
     /* Shape only, no marking of any kind — see GARMENT_PARTS in models.js. */
     {id:'sho_c_court', name:'White court low', tier:'free', part:'shoes_court'}
   ],
+  shoes:[
+    {id:'sho_c_stock', name:'Trainers',        tier:'free', part:'shoes_stock'},
+    /* Shape only, no marking of any kind — see GARMENT_PARTS in models.js. */
+    {id:'sho_c_court', name:'White court low', tier:'free', part:'shoes_court'}
+  ],
   hair:[
     /* The first nine are DERIVED from the character's own head (see HAIR_CAPS
        in models.js) — no download, and they fit any head. The rest are real
