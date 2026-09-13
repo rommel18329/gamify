@@ -28,8 +28,12 @@ function tintSlot(host,slot,hex){
         if(!def&&CLOTH_MAT_SKIP.test(m.name)) return; }
       if(slot==='hair'&&/^(Skin|Skin_Darker|Eye|Eyebrows)$/.test(m.name)) return;
       if(m.userData.baseHex===undefined) m.userData.baseHex=m.color.getHex();
+      /* A fade is two VALUES of one colour, not two colours. The faded sides
+         are the picked colour darkened, so picking a hair colour moves both
+         pieces together and the player never has to choose twice. */
+      const side=(o.userData&&o.userData.hairTone===1);
       if(hex===undefined||hex===null){ m.color.setHex(m.userData.baseHex); m.userData.tinted=false; }
-      else { m.color.setHex(hex); m.userData.tinted=true; }
+      else { m.color.setHex(side?hairSideHex(hex):hex); m.userData.tinted=true; }
       touched=true;
     });
   }));
@@ -801,7 +805,19 @@ const GARMENT_PARTS={
   hair_waves:  {slot:'hair', file:'characters/parts/Hair_Waves.glb',  node:'Beach_Head',      mats:['Hair'], mat:'Hair'},
   hair_fade:   {slot:'hair', file:'characters/parts/Hair_Fade.glb',   node:'Suit_Head',       mats:['Hair'], mat:'Hair'},
   hair_long:   {slot:'hair', file:'characters/parts/Hair_Long.glb',   node:'Adventurer_Head', mats:['Hair'], mat:'Hair'},
-  hair_mohawk: {slot:'hair', file:'characters/parts/Hair_Mohawk.glb', node:'Punk_Head',       mats:['Red','Red_Dark'], mat:'Red'}
+  hair_mohawk: {slot:'hair', file:'characters/parts/Hair_Mohawk.glb', node:'Punk_Head',       mats:['Red','Red_Dark'], mat:'Red'},
+
+  /* Derived from the character's own head — see HAIR_CAPS below. No file, no
+     download, and they fit whatever head is being worn by construction. */
+  hair_bald:     {slot:'hair', derive:'cap_bald'},
+  hair_buzz:     {slot:'hair', derive:'cap_buzz'},
+  hair_lowfade:  {slot:'hair', derive:'cap_lowfade'},
+  hair_taper:    {slot:'hair', derive:'cap_taper'},
+  hair_curlfade: {slot:'hair', derive:'cap_curlfade'},
+  hair_curls:    {slot:'hair', derive:'cap_curls'},
+  hair_afro:     {slot:'hair', derive:'cap_afro'},
+  hair_coils:    {slot:'hair', derive:'cap_coils'},
+  hair_hightop:  {slot:'hair', derive:'cap_hightop'}
 };
 /* Which node names a character's own top/bottom already go by. Every model in
    the pack follows <Character>_Body / _Legs (the Farmer calls its bottom
@@ -992,6 +1008,223 @@ function wearCutNow(host,slot,partId,donorScene,tint){
   return true;
 }
 
+
+/* The REAL vertical extent of a posed character, sampled through
+   applyBoneTransform.
+
+   Box3.setFromObject cannot do this: it transforms the geometry's BIND-POSE
+   bounds by the world matrix, and this rig's bind pose flings the arms out.
+   Measured on the default character: the bind box is 4.000 tall while the
+   character actually standing there is 2.146 — so anything that sizes or
+   frames a character off Box3 is working from a figure nearly twice too big.
+   Same trap the garment transplant and the body dials already hit, arriving
+   through a third door.
+
+   Sampled, not exhaustive: a couple of hundred vertices per mesh is plenty for
+   a silhouette and cheap enough to run on a wardrobe change (never per frame). */
+function posedBounds(root){
+  if(!root||typeof THREE==='undefined') return null;
+  root.updateMatrixWorld(true);
+  const v=new THREE.Vector3();
+  let lo=Infinity, hi=-Infinity;
+  root.traverse(o=>{
+    if(!o.isSkinnedMesh||!o.geometry||!o.geometry.attributes.position) return;
+    const P=o.geometry.attributes.position;
+    const step=Math.max(1,Math.floor(P.count/240));
+    for(let i=0;i<P.count;i+=step){
+      v.fromBufferAttribute(P,i);
+      if(o.applyBoneTransform) o.applyBoneTransform(i,v);
+      o.localToWorld(v);
+      if(v.y<lo) lo=v.y;
+      if(v.y>hi) hi=v.y;
+    }
+  });
+  return hi>lo ? {min:lo, max:hi, height:hi-lo, mid:(lo+hi)/2} : null;
+}
+
+/* ===================== DERIVED HAIRCUTS (fades, curls) =====================
+   A fade, a taper, a line-up or a buzz is NOT a silhouette — it is a
+   millimetre of hair hugging the skull, and all of its identity lives in the
+   HAIRLINE and the two tones. There is nothing to model, which is why no
+   asset library ships one, and a downloaded cap would be cut to someone
+   else's skull anyway.
+
+   So these are derived from the character's OWN head mesh: every vertex
+   pushed out along the surface by a few millimetres and the result cut at a
+   hairline. That makes them fit by construction, on any head, and costs ZERO
+   download — nothing here is a file.
+
+   Measured on this rig, in head-space: the crown sits at y=1.826, the brow at
+   1.715, the nape around 1.575, and one local unit is about 0.94 m, so a
+   millimetre of hair is 0.00106. `grow` is therefore roughly hair length in
+   metres/1000; `yF`/`yB` are where the hairline crosses at the front and the
+   back; `flatY` is the level guard line a fade is cut to; `yMax` stops the
+   short sides where the long top begins; `curl`/`clump` break the shell into
+   clumps. */
+const HAIR_CAPS={
+  cap_bald:     [],
+  cap_buzz:     [{grow:.0035, yF:1.757, yB:1.585}],
+  cap_lowfade:  [{grow:.0030, yF:1.757, yB:1.568, tone:1, yMax:1.742},
+                 {grow:.0135, yF:1.757, yB:1.568, flatY:1.742}],
+  cap_taper:    [{grow:.0030, yF:1.752, yB:1.598, tone:1, yMax:1.726},
+                 {grow:.0195, yF:1.752, yB:1.598, flatY:1.726}],
+  cap_curlfade: [{grow:.0030, yF:1.757, yB:1.568, tone:1, yMax:1.742},
+                 {grow:.0230, yF:1.757, yB:1.568, flatY:1.742, curl:.0115, clump:.018}],
+  cap_curls:    [{grow:.0210, yF:1.757, yB:1.585, curl:.0105, clump:.017}],
+  cap_afro:     [{grow:.0030, yF:1.760, yB:1.575, tone:1, yMax:1.688},
+                 {grow:.0470, yF:1.760, yB:1.575, flatY:1.688, curl:.0130, clump:.020}],
+  cap_coils:    [{grow:.0030, yF:1.757, yB:1.585, tone:1, yMax:1.700},
+                 {grow:.0330, yF:1.757, yB:1.585, flatY:1.700, curl:.0180, clump:.030}],
+  cap_hightop:  [{grow:.0026, yF:1.772, yB:1.598, tone:1, yMax:1.766},
+                 {grow:.0560, yF:1.772, yB:1.598, flatY:1.766, cap:1.886}]
+};
+/* How much darker the faded sides sit than the top. A fade is two VALUES of
+   one colour, so this multiplies whatever hair colour the player picked
+   rather than being a second colour they have to choose. */
+const HAIR_SIDE_MUL=0.45;
+function hairSideHex(hex){
+  const c=new THREE.Color(hex);
+  c.multiplyScalar(HAIR_SIDE_MUL);
+  return c.getHex();
+}
+
+/* Builds one piece of a haircut from the head's own skin mesh. */
+function makeHairCap(head,spec,hex){
+  if(typeof THREE==='undefined'||!head||!head.geometry) return null;
+  const g=head.geometry, P=g.attributes.position, N=g.attributes.normal;
+  const SI=g.attributes.skinIndex, SW=g.attributes.skinWeight, UV=g.attributes.uv;
+  if(!P||!N||!SI||!SW) return null;
+  const ZB=-0.062, ZF=0.175, BAND=0.022;
+
+  /* WELD THE NORMALS. The head is faceted — each corner carries a different
+     normal per face — so offsetting along the raw per-vertex normal pushes
+     adjacent triangles' shared corner apart and the shell tears into separate
+     facets. Invisible at buzz length, a crown of dark needles at anything
+     longer. Averaging every normal that shares a position welds it back. */
+  const key=i=>P.getX(i).toFixed(4)+','+P.getY(i).toFixed(4)+','+P.getZ(i).toFixed(4);
+  const wn={};
+  for(let i=0;i<P.count;i++){ const k=key(i);
+    const a=wn[k]||(wn[k]=[0,0,0]);
+    a[0]+=N.getX(i); a[1]+=N.getY(i); a[2]+=N.getZ(i); }
+  Object.keys(wn).forEach(k=>{ const a=wn[k];
+    const L=Math.hypot(a[0],a[1],a[2])||1; a[0]/=L; a[1]/=L; a[2]/=L; });
+
+  /* The hairline, in absolute head-space Y: a low nape at the back rising to
+     the line-up at the front. Biased rather than eased, so it climbs clear of
+     the ear by mid-head instead of sitting at ear height across the skull. */
+  const lineAt=z=>{ const t=Math.max(0,Math.min(1,(z-ZB)/(ZF-ZB)));
+    return Math.max(spec.yB+(spec.yF-spec.yB)*Math.pow(t,0.45), spec.flatY||0); };
+  /* The ears belong to this mesh and stick out past the skull; without this
+     the sides of a fade paint both ears jet black. Measured at |x|>0.086
+     between y 1.660 and 1.775. */
+  const isEar=i=>Math.abs(P.getX(i))>0.086&&P.getY(i)>1.660&&P.getY(i)<1.775;
+
+  const idx=g.index?g.index.array:null;
+  const tri=idx||{length:P.count};
+  const at=n=>idx?idx[n]:n;
+  const V=i=>({p:[P.getX(i),P.getY(i),P.getZ(i)], n:wn[key(i)].slice(),
+    u:UV?[UV.getX(i),UV.getY(i)]:null,
+    si:[0,1,2,3].map(c=>SI.getComponent(i,c)),
+    sw:[0,1,2,3].map(c=>SW.getComponent(i,c))});
+  const mid=(a,b)=>({p:a.p.map((v,k)=>(v+b.p[k])/2), n:a.n.map((v,k)=>(v+b.n[k])/2),
+    u:a.u?a.u.map((v,k)=>(v+b.u[k])/2):null, si:a.si.slice(), sw:a.sw.slice()});
+
+  /* SUBDIVIDE THE SCALP FIRST. The head is 832 vertices — triangles about a
+     centimetre across — and a line-up needs a far finer edge than that, so
+     cutting the raw mesh gives a ragged fringe of spikes instead of a
+     hairline. Two midpoint passes, and only on the triangles near the line. */
+  let work=[];
+  for(let t=0;t+2<tri.length;t+=3){
+    let above=0, ear=0;
+    for(let k=0;k<3;k++){ const i=at(t+k);
+      if(P.getY(i)>=lineAt(P.getZ(i))-BAND) above++;
+      if(isEar(i)) ear++; }
+    if(above===0||ear>=2) continue;
+    work.push([V(at(t)),V(at(t+1)),V(at(t+2))]);
+  }
+  for(let pass=0;pass<2;pass++){
+    const next=[];
+    work.forEach(([a,b,c])=>{ const ab=mid(a,b), bc=mid(b,c), ca=mid(c,a);
+      next.push([a,ab,ca],[ab,b,bc],[ca,bc,c],[ab,bc,ca]); });
+    work=next;
+  }
+
+  const pos=[],nrm=[],si=[],sw=[],uv=[];
+  work.forEach(t=>{
+    let above=0, over=0;
+    t.forEach(v=>{ if(v.p[1]>=lineAt(v.p[2])) above++;
+      if(spec.yMax&&v.p[1]>spec.yMax) over++; });
+    if(above===0) return;
+    /* The short sides and the long top must TILE, not stack: letting both
+       cover the crown put two near-coincident surfaces a centimetre apart,
+       which z-fought into a crown of dark needles. */
+    if(spec.yMax&&over===3) return;
+    t.forEach(v=>{
+      const L=lineAt(v.p[2]), y0=v.p[1];
+      /* Thickness ramps to ZERO at the hairline. A fixed offset leaves the cap
+         floating off the scalp at its cut edge, which reads as a lip of hair
+         hovering around the head — and meeting the skin at the line is what
+         makes a fade fade. */
+      const f=Math.max(0,Math.min(1,(y0-L)/BAND)), e=f*f*(3-2*f);
+      let gr=spec.grow*e;
+      /* CURL: clumps, not a smooth shell. The noise is keyed on the vertex
+         position SNAPPED to a grid, so every vertex in one clump gets the same
+         value and the surface stays closed; per-vertex noise tears it open
+         exactly the way unwelded normals did. */
+      if(spec.curl){
+        const q=spec.clump;
+        const s=Math.sin(Math.round(v.p[0]/q)*127.1+Math.round(v.p[1]/q)*311.7
+                        +Math.round(v.p[2]/q)*74.7)*43758.5453;
+        gr+=spec.curl*((s-Math.floor(s))-0.35)*e;
+      }
+      let y=y0+v.n[1]*gr;
+      if(y0<L) y=L;
+      if(spec.yMax&&y>spec.yMax) y=spec.yMax;
+      if(spec.cap&&y>spec.cap) y=spec.cap;
+      pos.push(v.p[0]+v.n[0]*gr, y, v.p[2]+v.n[2]*gr);
+      nrm.push(v.n[0],v.n[1],v.n[2]);
+      if(v.u) uv.push(v.u[0],v.u[1]);
+      for(let c=0;c<4;c++){ si.push(v.si[c]); sw.push(v.sw[c]); }
+    });
+  });
+  if(!pos.length) return null;
+
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('normal',new THREE.Float32BufferAttribute(nrm,3));
+  if(uv.length) geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  geo.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(si,4));
+  geo.setAttribute('skinWeight',new THREE.Float32BufferAttribute(sw,4));
+  const mat=head.material.clone();
+  mat.name='Hair';
+  mat.color.setHex(spec.tone?hairSideHex(hex):hex);
+  mat.userData.baseHex=mat.color.getHex();
+  const m=new THREE.SkinnedMesh(geo,mat);
+  /* Skin weights come straight off the head, so the cap rides the head bone
+     with no remapping at all — it is the same skeleton. */
+  m.bind(head.skeleton,head.bindMatrix);
+  m.frustumCulled=false;
+  m.userData.cutSlot='hair';
+  m.userData.hairTone=spec.tone?1:0;
+  return m;
+}
+
+/* Wears a derived haircut. Returns true if anything was put on — `cap_bald`
+   legitimately puts nothing on and still counts as worn. */
+function wearHairCap(host,partId,hex){
+  const specs=HAIR_CAPS[partId];
+  if(!host||!specs) return false;
+  let head=null, headSkin=null;
+  host.traverse(o=>{ if(!head&&/_Head$/.test(o.name)) head=o; });
+  host.traverse(o=>{ if(!headSkin&&o.isSkinnedMesh&&o.material&&o.material.name==='Skin'
+    &&o.parent&&/_Head$/.test(o.parent.name)) headSkin=o; });
+  if(!head||!headSkin) return false;
+  slotMeshes(host,'hair').forEach(o=>{ if(o.parent) o.parent.remove(o); });
+  const col=(hex===undefined||hex===null)?0x1A1410:hex;
+  specs.forEach(s=>{ const m=makeHairCap(headSkin,s,col); if(m) head.add(m); });
+  return true;
+}
+
 /* Applies every saved cut to a character, loading whatever it needs first.
    Async and entirely optional: a cut that fails to load leaves the character
    in what it already had on, never a half-dressed body or a thrown error. */
@@ -1013,6 +1246,15 @@ function applyCuts(host,fit,done){
        on every slider input, and a full re-wear clones a 62-bone rig each
        time; only an actual CHANGE of cut is worth that. */
     if(host.userData.worn[slot]===cut.part){ tintSlot(host,slot,tints[slot]); finish(); return; }
+    /* A derived haircut has no file to fetch — it is computed from the head
+       that is already on screen, so it lands synchronously. */
+    const def=GARMENT_PARTS[cut.part];
+    if(def&&def.derive){
+      if(wearHairCap(host,def.derive,tints[slot])){
+        host.userData.worn[slot]=cut.part; changed=true;
+      }
+      finish(); return;
+    }
     loadGarment(cut.part,scene=>{
       if(scene&&wearCutNow(host,slot,cut.part,scene,tints[slot])){
         host.userData.worn[slot]=cut.part; changed=true;

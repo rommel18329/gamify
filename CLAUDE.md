@@ -844,10 +844,12 @@ leaves the character in its bind pose.
 #### The wardrobe: real garment SHAPES (`DRIP_CUTS` / `wearCut`)
 
 A colourway changes what a garment is *coloured*; a **cut** changes what it
-*is*. Twelve cuts across three slots — hoodie / t-shirt / franela on top,
-denim shorts / gym shorts / jeans / baggy pants below, and five hairstyles —
-and **not one of them was modelled for this project.** All seven are parts of the Quaternius "Ultimate Modular Men"
-pack (CC0 1.0), the same pack the characters themselves come from, whose whole
+*is*. Twenty-one cuts across three slots — hoodie / t-shirt / franela on top,
+denim shorts / gym shorts / jeans / baggy pants below, and fourteen
+hairstyles — and **not one of them was modelled for this project.** The
+clothes and five of the hairstyles are parts of the Quaternius "Ultimate
+Modular Men" pack (CC0 1.0); the other nine hairstyles are derived from the
+character's own head (see "Haircuts that are DERIVED, not downloaded"), the same pack the characters themselves come from, whose whole
 premise is that `<Character>_Body` / `_Head` / `_Legs` / `_Feet` are
 interchangeable nodes on one shared 62-bone rig across all eleven characters.
 `GARMENT_PARTS` in `js/models.js` is the only place that knows which file a cut
@@ -928,6 +930,99 @@ Five things bite here, every one of them found by measuring:
   the garment. Without the per-slot exception a mohawk ignored the hair colour
   and came back in the Punk's own red.
 
+#### Haircuts that are DERIVED, not downloaded (`HAIR_CAPS` / `makeHairCap`)
+
+Nine of the fourteen hairstyles are computed from the character's own head at
+runtime. That is a deliberate answer to a real constraint, not a shortcut:
+
+**A fade cannot be downloaded, because there is nothing to model.** A bald
+fade, taper, line-up or buzz is a millimetre of hair hugging the skull, and
+all of its identity is in the HAIRLINE and the TWO TONES, not in a
+silhouette. Asset libraries ship silhouette hair — afros, locs, ponytails —
+because that is what can be modelled; nobody ships a fade, and a downloaded
+one would be cut to somebody else's skull anyway. (Checked: Sketchfab has a
+CC0 toon-dreadlocks model but its download API is 401 without a login, and
+itch.io needs a click-through, so neither can be fetched from here.)
+
+So `makeHairCap()` takes the head's own skin mesh, pushes every vertex out
+along the surface by a few millimetres and cuts the result at a hairline.
+That fits by construction, on any head, and costs **zero download** — the
+nine cuts added ~20 KB of code and no assets at all.
+
+Measured on this rig, in head space: crown `y=1.826`, brow `1.715`, nape
+`~1.575`, and one local unit is about 0.94 m — so a millimetre of hair is
+`0.00106`, which is what `grow` is in. Five things bite, every one found by
+rendering it wrong first:
+
+- **The ears are part of the head mesh and stick out past the skull**, so the
+  faded sides painted both of them jet black. Measured at `|x|>0.086` between
+  `y` 1.660 and 1.775 and masked out.
+- **The head is 832 vertices** — triangles about a centimetre across — and a
+  line-up needs a far finer edge, so cutting the raw mesh gave a ragged fringe
+  of spikes. Two midpoint subdivision passes, on the triangles near the line
+  only.
+- **The head is faceted, so its normals are split per face.** Offsetting along
+  the raw per-vertex normal pushes adjacent triangles' shared corner in
+  different directions and the shell tears into separate facets — invisible at
+  buzz length, a crown of dark needles at anything longer. Averaging every
+  normal that shares a position welds it back into one surface.
+- **The short sides and the long top must TILE, not stack.** Letting both
+  cover the crown put two near-coincident surfaces a centimetre apart, which
+  z-fought into the same crown of needles from a completely different cause.
+  `yMax` stops the sides where `flatY` starts the top.
+- **Curl noise must be keyed on a SNAPPED position.** Hair reads as clumps,
+  not as a smooth shell, but per-vertex noise tears the cap open exactly the
+  way unwelded normals did. Rounding the position to a `clump`-sized grid
+  before hashing gives every vertex in a clump the same value, so the surface
+  stays closed.
+
+Thickness also ramps to **zero at the hairline**: a fixed offset leaves the
+cap floating off the scalp at its cut edge, which reads as a lip of hair
+hovering around the head — and meeting the skin at the line is what makes a
+fade fade. The faded sides are the chosen hair colour multiplied by
+`HAIR_SIDE_MUL`, so a fade is two VALUES of one colour and the player never
+picks twice.
+
+#### `posedBounds()` — and why `Box3` was sizing every character wrong
+
+**`Box3.setFromObject` returns BIND-POSE bounds.** CLAUDE.md already warned
+about this twice (the garment transplant, the body dials); it was also
+silently wrong in a third place. Measured on the default character:
+
+```
+bind-pose box height  4.000
+real posed height     2.146     <- what is actually standing there
+```
+
+This rig's bind pose flings the arms out, so the box is nearly twice the
+character. The CHARACTER preview normalised to that box and framed its camera
+for it, so the model rendered at **55% of the frame** while every number in
+the code said it should fill it. `posedBounds()` in `js/models.js` samples
+real vertices through `applyBoneTransform` — the same method this file
+already prescribes for verifying skinning — and `refreshCharPreview()` now
+normalises and frames from that: **96% of the frame**, measured by reading
+back the rendered pixels rather than by eye.
+
+It is sampled (a couple of hundred vertices per mesh) and called on a
+wardrobe change, never per frame; `frameTo()` solves the camera distance that
+makes the measured height fill the vertical field of view.
+
+**`modelPerson()` has the same bug and is deliberately NOT fixed here.** It
+also scales by `4.0/Box3height`, which means every character in the WORLD is
+sized so its bind pose is 4 units and the person actually standing there is
+about 2.15. That makes "this world's fixed 4-unit person" — the figure
+`CAR_LENGTH`'s 2.4x ratio is derived from — wrong by the same factor; the car
+is really about 4.5x a person's height. Correcting it would resize every
+character in the world at once and drag collision radii, camera distances,
+spawn points and the car ratio with it, so it wants its own pass with fresh
+screenshots, not a drive-by change inside a wardrobe feature.
+
+Also fixed while here: the preview renderer was sized `host.clientWidth||300`
+by `260`, but the sheet is not laid out when it runs, so `clientWidth` was 0
+and it rendered a 300x260 buffer into a box that was neither. `fitPreview()`
+re-reads the host's real box every frame and resizes only when it changes,
+which also covers rotating the phone.
+
 #### Colour: a picker per slot, and why the swatches are free
 
 `TINT_SLOTS` is `skin / hair / top / bottom / shoes`, and `tintSlot()` is one
@@ -979,10 +1074,12 @@ The `blank()` copies are dead keys. The live path is the `character.` one —
 follow it; moving the data to match `blank()` would strip the fit off every
 existing save.
 
-**Cost:** ~1.6 MB of assets, `sprout.html` at 10.69 MB (still well under the
-16 MB cap) and **no measurable change** to interactive behind the artifact's
-own CSP — 136 ms, median of three, against 135 ms before the hair pack and the
-tailored shorts went in. The core path never touches any of it.
+**Cost:** ~1.6 MB of assets, `sprout.html` at 10.71 MB (still well under the
+16 MB cap) and 162 ms to interactive behind the artifact's own CSP against
+145 ms for the pre-wardrobe build — proportional to the size, and the core
+path never touches any of it. The nine derived haircuts add **no assets at
+all**, only ~20 KB of code. Beware measuring this while anything else is
+running: contended runs read 225-578 ms and are pure noise.
 
 #### EL DRIP: the fit catalogue
 
