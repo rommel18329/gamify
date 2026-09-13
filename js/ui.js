@@ -671,6 +671,20 @@ function repaintFitRows(){
       ? fit.tint[slot] : null;
     if(cur!==null) el.value='#'+cur.toString(16).padStart(6,'0');
   });
+  document.querySelectorAll('#sheetBody [data-face]').forEach(el=>{
+    const f=(typeof faceEntry==='function')&&faceEntry(el.getAttribute('data-face'));
+    if(!f) return;
+    const cf=(typeof currentFace==='function')?currentFace():'face_stock';
+    paint(el,f.id===cf,false,'Eye shape');
+  });
+  document.querySelectorAll('#sheetBody [data-build]').forEach(el=>{
+    const bd=(typeof buildEntry==='function')&&buildEntry(el.getAttribute('data-build'));
+    if(!bd) return;
+    const cur=(typeof currentBuild==='function')?currentBuild():'normal';
+    paint(el,bd.build===cur,false,
+      bd.build==='boxy'?'Dropped hem, squarer through the body'
+                       :'Cut close, as the model ships');
+  });
   document.querySelectorAll('#sheetBody [data-cut]').forEach(el=>{
     const [slot,id]=el.getAttribute('data-cut').split(':');
     const c=(typeof cutEntry==='function')&&cutEntry(slot,id); if(!c) return;
@@ -827,7 +841,31 @@ function openCharacter(){
          a part of the same CC0 Quaternius rig the character is (see
          GARMENT_PARTS in models.js). Only the GLB character can wear them. */
       if(!isVRM&&typeof DRIP_CUTS!=='undefined'){
-        const CUT_LABEL={top:'TOP',bottom:'BOTTOM',hair:'HAIR'};
+        /* THE BUILD, first: it changes the shape of whatever is picked below,
+           so it reads as the frame the rest of the choices sit inside. */
+        if(typeof DRIP_BUILDS!=='undefined'){
+          const cur=(typeof currentBuild==='function')?currentBuild():'normal';
+          html+='<div class="tkh">FIT</div>';
+          DRIP_BUILDS.forEach(bd=>{
+            const sel=bd.build===cur;
+            html+='<div class="row'+(sel?' done':'')+'" data-build="'+bd.id+'">'+
+              '<div class="ck">'+(sel?'✓':'')+'</div>'+
+              '<div class="nm">'+bd.name+'<span class="cue">'+
+              (bd.build==='boxy'?'Dropped hem, squarer through the body'
+                                :'Cut close, as the model ships')+'</span></div></div>';
+          });
+        }
+        if(typeof DRIP_FACES!=='undefined'){
+          const cf=(typeof currentFace==='function')?currentFace():'face_stock';
+          html+='<div class="tkh">FACE</div>';
+          DRIP_FACES.forEach(f=>{
+            const sel=f.id===cf;
+            html+='<div class="row'+(sel?' done':'')+'" data-face="'+f.id+'">'+
+              '<div class="ck">'+(sel?'✓':'')+'</div>'+
+              '<div class="nm">'+f.name+'<span class="cue">Eye shape</span></div></div>';
+          });
+        }
+        const CUT_LABEL={top:'TOP',bottom:'BOTTOM',shoes:'SHOES',hair:'HAIR'};
         CUT_SLOTS.forEach(slot=>{
           html+='<div class="tkh">'+CUT_LABEL[slot]+'</div>';
           const worn=currentCut(slot);
@@ -913,6 +951,33 @@ function openCharacter(){
       save(); repaintFitRows(); refreshCharPreview();
     });
   });
+  document.querySelectorAll('#sheetBody [data-face]').forEach(el=>{
+    bindTap(el,()=>{
+      const f=faceEntry(el.getAttribute('data-face'));
+      if(!f) return;
+      const c=S.person.character;
+      c.fit=c.fit||{hide:{},tint:{},cut:{}};
+      c.fit.face=f.id;
+      if(charPrev&&charPrev.plain&&typeof applyFace==='function')
+        applyFace(charPrev.plain,f.id);
+      save(); repaintFitRows(); refreshCharPreview();
+    });
+  });
+
+  /* The build toggle reshapes every garment already on the body, so the worn
+     record is cleared to force a re-wear rather than a re-tint. */
+  document.querySelectorAll('#sheetBody [data-build]').forEach(el=>{
+    bindTap(el,()=>{
+      const bd=buildEntry(el.getAttribute('data-build'));
+      if(!bd) return;
+      const c=S.person.character;
+      c.fit=c.fit||{hide:{},tint:{},cut:{}};
+      c.fit.build=bd.build;
+      if(charPrev&&charPrev.plain) charPrev.plain.userData.worn={};
+      save(); repaintFitRows(); refreshCharPreview();
+    });
+  });
+
   /* The colour wheel. `input` rather than `change` so the character recolours
      under the finger while the picker is open, and save() only on release —
      save() serialises the whole of S to localStorage and an iOS colour wheel
