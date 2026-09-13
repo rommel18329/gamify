@@ -599,19 +599,53 @@ function startCharPreview(){
     renderer.setSize(bw,bh,false);
     cam.aspect=bw/bh; cam.updateProjectionMatrix();
   };
+  /* Where to look when a given section is being edited. Picking a haircut
+     while the camera shows the whole body is most of the reason the cuts
+     looked samey — the difference between a taper and a low fade is a
+     centimetre of hairline. Anchored to BONES, not to fixed heights, so the
+     framing follows the body dials instead of drifting off a resized head. */
+  const REGIONS={
+    head:  {bones:['head'],                          up:  .30, h:1.15},
+    torso: {bones:['chest'],                         up: -.15, h:2.00},
+    legs:  {bones:['leftLowerLeg','rightLowerLeg'],  up:  .45, h:2.55},
+    feet:  {bones:['leftFoot','rightFoot'],          up:  .16, h:1.00}
+  };
+  /* AVERAGE the pair, and aim at where the bones actually ARE in x and z.
+     Framing on height alone put the head off to one side and the feet shot
+     centred on the left shoe — at this distance a couple of centimetres of
+     offset is most of the frame, and the rig is spinning besides. */
+  const regionFit=(target)=>{
+    const r=REGIONS[charPrev.focus]; if(!r) return null;
+    if(typeof bodyBones!=='function') return null;
+    let B; try{ B=bodyBones(target); }catch(e){ return null; }
+    if(!B) return null;
+    const v=new THREE.Vector3(); let x=0,y=0,z=0,n=0;
+    r.bones.forEach(nm=>{ const bone=B(nm); if(!bone) return;
+      bone.getWorldPosition(v); x+=v.x; y+=v.y; z+=v.z; n++; });
+    if(!n) return null;
+    return {cx:x/n, cy:y/n+r.up, cz:z/n, h:r.h};
+  };
   /* Frame the measured silhouette: solve the distance that makes it fill the
      vertical field of view, with a little margin so a wide Shoulders setting
      still fits. charPrev.fit is measured in refreshCharPreview() through
      applyBoneTransform — measuring it per frame would be far too costly. */
-  const frameTo=(root)=>{
+  const frameTo=(root,target)=>{
     const f=charPrev.fit;
     let cy, hh;
-    if(f&&f.h>.001){ cy=f.cy; hh=f.h; }
+    let cx=0, cz=0;
+    const reg=regionFit(target||root);
+    if(reg){ cx=reg.cx; cy=reg.cy; cz=reg.cz; hh=reg.h; }
+    else if(f&&f.h>.001){ cy=f.cy; hh=f.h; }
     else { const box=new THREE.Box3().setFromObject(root);
       hh=Math.max(box.max.y-box.min.y,.001); cy=(box.max.y+box.min.y)/2; }
     const d=(hh*0.5)/Math.tan(cam.fov*Math.PI/360)*1.12;
-    cam.position.set(0,cy,d);
-    cam.lookAt(0,cy,0);
+    /* Ease toward the target so changing section reads as the camera moving
+       rather than as a cut, and so the very first frame is not a lurch. */
+    if(charPrev.cy===undefined){ charPrev.cx=cx; charPrev.cy=cy; charPrev.cz=cz; charPrev.cd=d; }
+    else { charPrev.cx+=(cx-charPrev.cx)*.16; charPrev.cy+=(cy-charPrev.cy)*.16;
+           charPrev.cz+=(cz-charPrev.cz)*.16; charPrev.cd+=(d-charPrev.cd)*.16; }
+    cam.position.set(charPrev.cx,charPrev.cy,charPrev.cz+charPrev.cd);
+    cam.lookAt(charPrev.cx,charPrev.cy,charPrev.cz);
   };
   const tick=()=>{
     if(!charPrev) return;
@@ -622,7 +656,7 @@ function startCharPreview(){
     if(charPrev.plain){
       // the GLB rig animates through its own mixer, exactly as in the world
       if(typeof updateAnimated==='function') updateAnimated(1/60);
-      frameTo(charPrev.plain);
+      frameTo(charPrev.plain,charPrev.plain);
     }
     if(charPrev.vrm){
       /* Drive the retargeter, THEN vrm.update(). Calling update() alone leaves
@@ -633,7 +667,7 @@ function startCharPreview(){
       const rt=charPrev.vrm.userData&&charPrev.vrm.userData.retarget;
       if(rt){ rt.setAnim('idle'); rt.update(1/60); }
       charPrev.vrm.update(1/60);
-      frameTo(charPrev.vrm.scene);
+      frameTo(charPrev.vrm.scene,charPrev.vrm);
     }
     renderer.render(scene,cam);
   };
@@ -646,6 +680,16 @@ function startCharPreview(){
    WebGL context, so every tap blanked the character for a beat and started it
    spinning from zero again. Picking clothes is the one screen where you have
    to see the change, so the rows are patched and the model is left alone. */
+/* Which part of the body a control is about. Tapping anything in a section
+   points the preview at it. */
+const FOCUS_OF={hair:'head',face:'head',skin:'head',
+                top:'torso',bottom:'legs',shoes:'feet'};
+function focusPreview(region){
+  if(!charPrev) return;
+  charPrev.focus=(region&&REGION_NAMES.indexOf(region)>=0)?region:null;
+}
+const REGION_NAMES=['head','torso','legs','feet'];
+
 function repaintFitRows(){
   const fit=(S.person&&S.person.character&&S.person.character.fit)||{};
   const paint=(el,sel,locked,cue)=>{
@@ -922,6 +966,7 @@ function openCharacter(){
       c.body[k]=parseFloat(el.value);
       const lbl=document.getElementById('dv_'+k);
       if(lbl) lbl.textContent=Math.round(parseFloat(el.value)*100)+'%';
+      focusPreview(k==='head'?'head':null);
       refreshCharPreview();
     };
     el.addEventListener('input',apply);
@@ -939,6 +984,7 @@ function openCharacter(){
       const parts=el.getAttribute('data-fit').split(':');
       const slot=parts[0], f=fitEntry(slot,parts[1]);
       if(!f) return;
+      focusPreview(FOCUS_OF[slot]);
       let lock=fitLock(f);
       if(!lock.ok){
         if(f.tier!=='cash'){ toast('Not yet — '+f.why); return; }
@@ -955,6 +1001,7 @@ function openCharacter(){
     bindTap(el,()=>{
       const f=faceEntry(el.getAttribute('data-face'));
       if(!f) return;
+      focusPreview('head');
       const c=S.person.character;
       c.fit=c.fit||{hide:{},tint:{},cut:{}};
       c.fit.face=f.id;
@@ -970,6 +1017,7 @@ function openCharacter(){
     bindTap(el,()=>{
       const bd=buildEntry(el.getAttribute('data-build'));
       if(!bd) return;
+      focusPreview(null);            // the build changes the whole silhouette
       const c=S.person.character;
       c.fit=c.fit||{hide:{},tint:{},cut:{}};
       c.fit.build=bd.build;
@@ -988,6 +1036,7 @@ function openCharacter(){
       const c=S.person.character;
       c.fit=c.fit||{hide:{},tint:{},cut:{}}; c.fit.tint=c.fit.tint||{};
       c.fit.tint[slot]=parseInt(el.value.replace('#',''),16);
+      focusPreview(FOCUS_OF[slot]);
       document.querySelectorAll('#sheetBody [data-fit^="'+slot+':"]')
         .forEach(sw=>sw.classList.remove('sel'));
       refreshCharPreview();
@@ -1004,6 +1053,7 @@ function openCharacter(){
       const parts=el.getAttribute('data-cut').split(':');
       const slot=parts[0], c=cutEntry(slot,parts[1]);
       if(!c) return;
+      focusPreview(FOCUS_OF[slot]);
       const lock=fitLock(c);
       if(!lock.ok){
         if(c.tier!=='cash'){ toast('Not yet — '+c.why); return; }
