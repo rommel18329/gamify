@@ -1274,10 +1274,18 @@ function makeHairCap(head,spec,hex){
      the ear by mid-head instead of sitting at ear height across the skull. */
   const lineAt=z=>{ const t=Math.max(0,Math.min(1,(z-ZB)/(ZF-ZB)));
     return Math.max(spec.yB+(spec.yF-spec.yB)*Math.pow(t,0.45), spec.flatY||0); };
-  /* The ears belong to this mesh and stick out past the skull; without this
-     the sides of a fade paint both ears jet black. Measured at |x|>0.086
-     between y 1.660 and 1.775. */
-  const isEar=i=>Math.abs(P.getX(i))>0.086&&P.getY(i)>1.660&&P.getY(i)<1.775;
+  /* The ears belong to this mesh and stick out past the skull; without a mask
+     the sides of a fade paint both ears jet black.
+
+     The box has to be the EAR and nothing else. A first pass used |x|>0.086
+     over y 1.660-1.775, which sounds tight and is not: binning |x| across
+     that band shows 138 vertices sitting at 0.085-0.095 — those are the SIDE
+     OF THE SKULL — against just 17 beyond 0.095, which is the whole ear. The
+     loose box deleted both temples along with the ears and the haircut went
+     visibly bald down the sides. Measured ear: |x|>0.095, y 1.668-1.699,
+     z 0.071-0.079. */
+  const isEar=i=>Math.abs(P.getX(i))>0.095&&P.getY(i)>1.660&&P.getY(i)<1.712
+               &&P.getZ(i)>0.050&&P.getZ(i)<0.100;
 
   const idx=g.index?g.index.array:null;
   const tri=idx||{length:P.count};

@@ -1023,6 +1023,46 @@ and it rendered a 300x260 buffer into a box that was neither. `fitPreview()`
 re-reads the host's real box every frame and resizes only when it changes,
 which also covers rotating the phone.
 
+#### The preview zooms to the section being edited
+
+Picking a haircut while the camera shows the whole body is most of the reason
+the cuts read as samey — the difference between a taper and a low fade is a
+centimetre of hairline, and at full-body framing that is a few pixels. Tapping
+anything in a section points the preview at it: hair/face/skin → head,
+tops → torso, bottoms → legs, shoes → feet, and the build or a body dial goes
+back to the whole figure. `FOCUS_OF` is the single map from control to region.
+
+**The regions are anchored to BONES, not to fixed heights**, so the framing
+follows the body dials instead of drifting off a resized head — and each one
+**averages a PAIR** and aims at where the bones actually are in x and z, not
+just their height. Framing on height alone put the head off to one side and
+shot the feet centred on the left shoe: at a camera distance of ~2 units a
+couple of centimetres of offset is most of the frame, and the rig is spinning
+besides. The camera eases toward its target rather than cutting, so changing
+section reads as a move.
+
+#### The ear mask, and the haircut that went bald down the sides
+
+Worth recording because the first version looked plausible and was badly
+wrong. `makeHairCap()` masks the ears out, or the faded sides paint both of
+them jet black. The first mask was `|x|>0.086` over `y` 1.660-1.775 — which
+sounds tight, and is not. Binning `|x|` across that band:
+
+```
+0.080   34
+0.085   52     <- skull
+0.090   64     <- skull
+0.095   22
+0.105   14     <- the actual ear
+```
+
+**138 of those vertices are the side of the skull**, against 17 beyond 0.095
+that are the whole ear. The loose box deleted both temples along with the
+ears and every haircut went visibly bald down the sides. The real ear is
+`|x|>0.095`, `y` 1.668-1.699, `z` 0.071-0.079, and the mask is now that box.
+If a cut ever looks thin at the temples again, this is the first thing to
+check — and check it by binning the axis, not by eye.
+
 #### The BUILD (normal / oversized), and the FACE
 
 Two more dimensions on the wardrobe, both **derived** rather than shipped,
@@ -1069,10 +1109,13 @@ exception to colour inheritance: every other cut rightly inherits the
 outgoing garment's colour, but the entire point of this pair is that they
 are white, and inheriting handed back a blue pair.
 
-**Every hairstyle is free.** They were priced when they were downloads; nine
-of the fourteen are now derived at zero cost, and gating a haircut behind
-cash while the colour wheel next to it is free was an inconsistency rather
-than an economy. The prices stay on the clothes.
+**Every cut is free — hair and clothes both.** They were priced when they
+were downloads; most are derived at zero cost now, and gating any of it
+behind cash while the colour wheel beside it is free was an inconsistency
+rather than an economy. `fitLock()`/`buyFit()` are untouched and still
+enforce `cash` and `earned` tiers, so the money comes back the moment there
+is something worth charging for — custom pieces and achievement-gated drops.
+The DRIP *track* (`TRACKS.drip`) is a separate ladder and is unaffected.
 
 #### Colour: a picker per slot, and why the swatches are free
 

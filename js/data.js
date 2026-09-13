@@ -1299,16 +1299,16 @@ const CUT_SLOTS=['top','bottom','shoes','hair'];
 const DRIP_CUTS={
   top:[
     {id:'cut_hoodie',  name:'Hoodie',        tier:'free', part:'hoodie_top'},
-    {id:'cut_tee',     name:'T-shirt',       tier:'cash', price:180, part:'tee_top'},
-    {id:'cut_franela', name:'Franela',       tier:'cash', price:240, part:'franela_top'}
+    {id:'cut_tee',     name:'T-shirt',       tier:'free', part:'tee_top'},
+    {id:'cut_franela', name:'Franela',       tier:'free', part:'franela_top'}
   ],
   bottom:[
     /* Both shorts are premade trousers hemmed to a real length — denim 2.5in
        below the knee, gym 1.5in above it. See GARMENT_PARTS in models.js. */
     {id:'cut_denim',   name:'Denim shorts',  tier:'free', part:'denimshorts'},
-    {id:'cut_gym',     name:'Gym shorts',    tier:'cash', price:200, part:'gymshorts'},
-    {id:'cut_jeans',   name:'Jeans',         tier:'cash', price:300, part:'jeans'},
-    {id:'cut_baggy',   name:'Baggy pants',   tier:'cash', price:420, part:'baggy'}
+    {id:'cut_gym',     name:'Gym shorts',    tier:'free', part:'gymshorts'},
+    {id:'cut_jeans',   name:'Jeans',         tier:'free', part:'jeans'},
+    {id:'cut_baggy',   name:'Baggy pants',   tier:'free', part:'baggy'}
   ],
   shoes:[
     {id:'sho_c_stock', name:'Trainers',        tier:'free', part:'shoes_stock'},
