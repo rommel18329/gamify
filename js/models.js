@@ -31,9 +31,17 @@ function tintSlot(host,slot,hex){
       /* A fade is two VALUES of one colour, not two colours. The faded sides
          are the picked colour darkened, so picking a hair colour moves both
          pieces together and the player never has to choose twice. */
-      const side=(o.userData&&o.userData.hairTone===1);
+      /* A faded cap carries its colour in a vertex ramp between hair and
+         skin, so it is REBUILT rather than assigned — setting a flat colour
+         on it would throw the gradient away. */
+      if(o.userData&&o.userData.hairCap){
+        const want=(hex===undefined||hex===null)?(o.userData.hairHex||0x1A1410):hex;
+        recolorCap(o,want,o.userData.skinHex||0x8D5A38);
+        return;
+      }
+      if(m.userData.baseHex===undefined) m.userData.baseHex=m.color.getHex();
       if(hex===undefined||hex===null){ m.color.setHex(m.userData.baseHex); m.userData.tinted=false; }
-      else { m.color.setHex(side?hairSideHex(hex):hex); m.userData.tinted=true; }
+      else { m.color.setHex(hex); m.userData.tinted=true; }
       touched=true;
     });
   }));
@@ -1222,45 +1230,90 @@ function posedBounds(root){
    short sides where the long top begins; `curl`/`clump` break the shell into
    clumps. */
 const HAIR_CAPS={
-  cap_bald:     [],
-  cap_buzz:     [{grow:.0035, yF:1.757, yB:1.585}],
-  cap_lowfade:  [{grow:.0030, yF:1.757, yB:1.568, tone:1, yMax:1.742},
-                 {grow:.0135, yF:1.757, yB:1.568, flatY:1.742}],
-  cap_taper:    [{grow:.0030, yF:1.752, yB:1.598, tone:1, yMax:1.726},
-                 {grow:.0195, yF:1.752, yB:1.598, flatY:1.726}],
-  cap_curlfade: [{grow:.0030, yF:1.757, yB:1.568, tone:1, yMax:1.742},
-                 {grow:.0230, yF:1.757, yB:1.568, flatY:1.742, curl:.0115, clump:.018}],
-  cap_curls:    [{grow:.0210, yF:1.757, yB:1.585, curl:.0105, clump:.017}],
-  cap_afro:     [{grow:.0030, yF:1.760, yB:1.575, tone:1, yMax:1.688},
-                 {grow:.0470, yF:1.760, yB:1.575, flatY:1.688, curl:.0130, clump:.020}],
-  cap_coils:    [{grow:.0030, yF:1.757, yB:1.585, tone:1, yMax:1.700},
-                 {grow:.0330, yF:1.757, yB:1.585, flatY:1.700, curl:.0180, clump:.030}],
-  cap_hightop:  [{grow:.0026, yF:1.772, yB:1.598, tone:1, yMax:1.766},
-                 {grow:.0560, yF:1.772, yB:1.598, flatY:1.766, cap:1.886}]
-};
-/* How much darker the faded sides sit than the top. A fade is two VALUES of
-   one colour, so this multiplies whatever hair colour the player picked
-   rather than being a second colour they have to choose. */
-const HAIR_SIDE_MUL=0.45;
-function hairSideHex(hex){
-  const c=new THREE.Color(hex);
-  c.multiplyScalar(HAIR_SIDE_MUL);
-  return c.getHex();
-}
+  /* lineY  — the line-up: a FLAT line across the forehead, absolute head Y
+     lineBack — where the hairline sits at the nape
+     fadeLo/fadeHi — zero hair at Lo, full length at Hi
+     grow   — hair length; the head is 0.327 local units for roughly 17cm,
+              so one millimetre is about 0.0019 here
+     curl/clump — depth and size of the clumps
+     tight  — how much length survives on a vertical surface: 1 keeps the
+              cap uniform, low values crop the sides in to the skull
+     cap    — flat top, clamped to this height
 
-/* Builds one piece of a haircut from the head's own skin mesh. */
-function makeHairCap(head,spec,hex){
+     The fade bands are short AND sit high. Placed low they left the temple
+     at nearly full darkness where it hangs forward past the eye, which read
+     as a mushroom rather than a fade; by the time the hairline comes forward
+     at the temple the fade should already be mostly skin.
+
+     They are also deliberately SHORT. A first pass spread them over
+     0.134 local units — some 7cm of scalp — and the result read as hair
+     softly petering out rather than as a fade; a real low fade does the
+     whole transition in three or four centimetres. */
+  cap_bald:     null,
+  /* Clipper-short all over: barely off the skin, no curl, fade almost
+     immediate. */
+  cap_buzz:     {tight:0.80, lineY:1.732, lineBack:1.620, fadeLo:1.640, fadeHi:1.668,
+                 grow:.0065},
+  /* Short on top, skin at the bottom, fade sitting low near the ear. */
+  cap_lowfade:  {tight:0.26, lineY:1.735, lineBack:1.618, fadeLo:1.630, fadeHi:1.700,
+                 grow:.0205},
+  /* Longer on top and a softer, higher transition than the low fade. */
+  cap_taper:    {tight:0.46, lineY:1.733, lineBack:1.628, fadeLo:1.656, fadeHi:1.726,
+                 grow:.0300},
+  /* The fresh-haircut one: real curl on top taking a smooth skin fade all
+     the way down to zero, with a crisp line-up across the front. */
+  cap_curlfade: {tight:0.24, lineY:1.735, lineBack:1.618, fadeLo:1.628, fadeHi:1.702,
+                 grow:.0330, curl:.0165, clump:.0150},
+  /* Curl everywhere rather than only on top — grown out, not faded. */
+  cap_curls:    {tight:0.62, lineY:1.733, lineBack:1.622, fadeLo:1.636, fadeHi:1.694,
+                 grow:.0300, curl:.0150, clump:.0155},
+  /* Bigger, chunkier clumps. */
+  cap_coils:    {tight:0.52, lineY:1.735, lineBack:1.619, fadeLo:1.632, fadeHi:1.698,
+                 grow:.0420, curl:.0230, clump:.0285},
+  /* Volume all round, only the very bottom taken in. */
+  cap_afro:     {tight:0.90, lineY:1.736, lineBack:1.620, fadeLo:1.628, fadeHi:1.688,
+                 grow:.0580, curl:.0165, clump:.0205},
+  /* A tall flat box on top over cropped sides — the cap has to sit BELOW
+     crown+grow or it never clamps and the shape stays a dome. */
+  cap_hightop:  {tight:0.16, lineY:1.740, lineBack:1.622, fadeLo:1.646, fadeHi:1.734,
+                 grow:.0900, cap:1.884}
+};
+
+
+/* Builds a haircut from the head's own skin mesh.
+
+   A FADE IS A GRADIENT. The first version cut the scalp at a line and filled
+   it with one flat colour, plus a second flat piece on top — and it rendered
+   as a swim cap with a staircase along its bottom edge, because two flat
+   tones separated by a hard line is the one thing a fade is not.
+
+   So there is no bottom cut any more. The cap covers the whole scalp, and
+   BOTH its thickness and its colour ramp from full hair at the top to
+   nothing at the bottom: at the low end the mesh sits a fraction of a
+   millimetre off the skin in exactly the skin's own colour, which is what
+   skin-faded-to-zero actually looks like. No cut edge means no staircase,
+   and the fade is continuous rather than stepped.
+
+   The one place a real cut exists is the FRONT, because that is what a
+   line-up is: a sharp straight edge across the forehead. It is found by
+   NORMAL rather than by position — a vertex below the hairline whose normal
+   faces forward is face, one whose normal faces sideways is the temple in
+   front of the ear and is still hair — so the line-up stays crisp without
+   shaving the sideburns off.
+
+   Colour lives in VERTEX COLOURS, which is the only way to get a smooth ramp
+   without a custom shader (see "No custom GLSL, ever"). recolorCap() rebuilds
+   them when the hair or skin colour changes. */
+function makeHairCap(head,spec,hairHex,skinHex){
   if(typeof THREE==='undefined'||!head||!head.geometry) return null;
   const g=head.geometry, P=g.attributes.position, N=g.attributes.normal;
   const SI=g.attributes.skinIndex, SW=g.attributes.skinWeight, UV=g.attributes.uv;
   if(!P||!N||!SI||!SW) return null;
-  const ZB=-0.062, ZF=0.175, BAND=0.022;
+  const ZB=-0.062, ZF=0.175;
 
-  /* WELD THE NORMALS. The head is faceted — each corner carries a different
-     normal per face — so offsetting along the raw per-vertex normal pushes
-     adjacent triangles' shared corner apart and the shell tears into separate
-     facets. Invisible at buzz length, a crown of dark needles at anything
-     longer. Averaging every normal that shares a position welds it back. */
+  /* Weld normals: the head is faceted, so offsetting along raw per-vertex
+     normals pushes adjacent triangles' shared corner apart and tears the
+     shell into loose facets. */
   const key=i=>P.getX(i).toFixed(4)+','+P.getY(i).toFixed(4)+','+P.getZ(i).toFixed(4);
   const wn={};
   for(let i=0;i<P.count;i++){ const k=key(i);
@@ -1269,23 +1322,53 @@ function makeHairCap(head,spec,hex){
   Object.keys(wn).forEach(k=>{ const a=wn[k];
     const L=Math.hypot(a[0],a[1],a[2])||1; a[0]/=L; a[1]/=L; a[2]/=L; });
 
-  /* The hairline, in absolute head-space Y: a low nape at the back rising to
-     the line-up at the front. Biased rather than eased, so it climbs clear of
-     the ear by mid-head instead of sitting at ear height across the skull. */
-  const lineAt=z=>{ const t=Math.max(0,Math.min(1,(z-ZB)/(ZF-ZB)));
-    return Math.max(spec.yB+(spec.yF-spec.yB)*Math.pow(t,0.45), spec.flatY||0); };
-  /* The ears belong to this mesh and stick out past the skull; without a mask
-     the sides of a fade paint both ears jet black.
+  /* THE HAIRLINE, FITTED TO THE PACK'S OWN HAIRSTYLE. The authored hair mesh
+     is ground truth for where a haircut sits on this head; sampling its
+     lowest vertex per (|x|, z) cell gives the line to match:
 
-     The box has to be the EAR and nothing else. A first pass used |x|>0.086
-     over y 1.660-1.775, which sounds tight and is not: binning |x| across
-     that band shows 138 vertices sitting at 0.085-0.095 — those are the SIDE
-     OF THE SKULL — against just 17 beyond 0.095, which is the whole ear. The
-     loose box deleted both temples along with the ears and the haircut went
-     visibly bald down the sides. Measured ear: |x|>0.095, y 1.668-1.699,
-     z 0.071-0.079. */
+        |x|=0.00  front z=0.12 -> 1.730     back z=-0.05 -> 1.625
+        |x|=0.04  front z=0.10 -> 1.723
+        |x|=0.08  front z=0.10 -> 1.648     z=0.05 -> 1.676
+
+     So the line falls going backwards AND falls steeply going outwards — the
+     temple sits a good 8cm below the centre of the forehead. Three earlier
+     attempts guessed at this instead of measuring: by depth alone (a bald
+     patch from the ear up), then by surface normal (a bowl cut over the
+     eyes, because a faceted head's welded normals do not separate forehead
+     from cheek). This is a plane fitted to those samples and clamped. */
+  const LB=(spec.lineY-spec.lineBack)/0.17;
+  const LA=spec.lineY-LB*0.12;
+  const lineAt=(x,z)=>Math.max(spec.lineBack,
+    Math.min(spec.lineY, LA+LB*z-0.875*Math.abs(x)));
+  /* How much hair is at this height: 0 at the bottom of the fade, 1 where it
+     reaches full length. smoothstepped, so the blend has no visible seam. */
+  const fadeAt=y=>{ const t=Math.max(0,Math.min(1,(y-spec.fadeLo)/(spec.fadeHi-spec.fadeLo)));
+    return t*t*(3-2*t); };
+  /* The measured ear: |x|>0.095, y 1.668-1.699, z 0.071-0.079. A looser box
+     takes both temples with it — see the histogram in CLAUDE.md. */
   const isEar=i=>Math.abs(P.getX(i))>0.095&&P.getY(i)>1.660&&P.getY(i)<1.712
                &&P.getZ(i)>0.050&&P.getZ(i)<0.100;
+  /* The face: anything below the hairline that is not the side or the back
+     of the skull. The sideburn strip in front of the ear sits past |x|=0.084
+     and has to survive, which is why this is not simply "the front half" —
+     but a normal test alone kept the cheeks and jaw, and the cap painted
+     them a near-skin panel that flattened the whole face. */
+  /* THE ONLY CUT IS THE FOREHEAD, and it is found by NORMAL rather than by
+     depth. A z threshold cannot separate forehead from temple: the two sit
+     at nearly the same depth, so cutting by z either shaved a bald patch
+     from the ear upward (threshold too far back) or left the line-up ragged
+     (too far forward). The forehead faces FORWARD and the temple faces
+     SIDEWAYS, which tells them apart cleanly.
+
+     Everywhere else the hair simply shortens to nothing and takes the skin's
+     colour, which needs no cut at all — and a cut there was what put a hard
+     diagonal seam across the temple. */
+  /* The face is the front of the skull, and measurement puts that at
+     z>0.088: every front-facing skin vertex sits beyond it. Behind that is
+     temple and side, which are never cut — the hair there just shortens to
+     nothing and takes the skin's colour. */
+  const ZCUT=0.088;
+  const isFace=i=>P.getZ(i)>ZCUT&&P.getY(i)<lineAt(P.getX(i),P.getZ(i));
 
   const idx=g.index?g.index.array:null;
   const tri=idx||{length:P.count};
@@ -1297,17 +1380,22 @@ function makeHairCap(head,spec,hex){
   const mid=(a,b)=>({p:a.p.map((v,k)=>(v+b.p[k])/2), n:a.n.map((v,k)=>(v+b.n[k])/2),
     u:a.u?a.u.map((v,k)=>(v+b.u[k])/2):null, si:a.si.slice(), sw:a.sw.slice()});
 
-  /* SUBDIVIDE THE SCALP FIRST. The head is 832 vertices — triangles about a
-     centimetre across — and a line-up needs a far finer edge than that, so
-     cutting the raw mesh gives a ragged fringe of spikes instead of a
-     hairline. Two midpoint passes, and only on the triangles near the line. */
+  /* SUBDIVISION, uniform at two passes. Three over the whole scalp produced
+     a 45,870-vertex haircut on a character that is otherwise about 10,000,
+     and this game is played on a phone. Refining only the band around the
+     line-up looked like the obvious saving and is not: fine triangles beside
+     coarse ones meet at T-junctions, which crack open along the seam — the
+     fringe came back over the eyebrows through the gaps. Uniform density
+     cannot crack, and the crisp line-up comes from SNAPPING the straddling
+     vertices onto the line rather than from sheer triangle count. */
   let work=[];
   for(let t=0;t+2<tri.length;t+=3){
-    let above=0, ear=0;
+    let face=0, ear=0, low=0;
     for(let k=0;k<3;k++){ const i=at(t+k);
-      if(P.getY(i)>=lineAt(P.getZ(i))-BAND) above++;
-      if(isEar(i)) ear++; }
-    if(above===0||ear>=2) continue;
+      if(isFace(i)) face++;
+      if(isEar(i)) ear++;
+      if(P.getY(i)<spec.fadeLo-0.030) low++; }
+    if(face===3||ear>=2||low===3) continue;
     work.push([V(at(t)),V(at(t+1)),V(at(t+2))]);
   }
   for(let pass=0;pass<2;pass++){
@@ -1317,42 +1405,62 @@ function makeHairCap(head,spec,hex){
     work=next;
   }
 
-  const pos=[],nrm=[],si=[],sw=[],uv=[];
+  const pos=[],nrm=[],si=[],sw=[],uv=[],fade=[];
   work.forEach(t=>{
-    let above=0, over=0;
-    t.forEach(v=>{ if(v.p[1]>=lineAt(v.p[2])) above++;
-      if(spec.yMax&&v.p[1]>spec.yMax) over++; });
-    if(above===0) return;
-    /* The short sides and the long top must TILE, not stack: letting both
-       cover the crown put two near-coincident surfaces a centimetre apart,
-       which z-fought into a crown of dark needles. */
-    if(spec.yMax&&over===3) return;
+    /* Drop what is left of the face at full subdivision, so the line-up lands
+       on the fine mesh rather than on the head's own coarse triangles. */
+    let face=0;
+    t.forEach(v=>{ if(v.p[2]>ZCUT&&v.p[1]<lineAt(v.p[0],v.p[2])) face++; });
+    if(face===3) return;
     t.forEach(v=>{
-      const L=lineAt(v.p[2]), y0=v.p[1];
-      /* Thickness ramps to ZERO at the hairline. A fixed offset leaves the cap
-         floating off the scalp at its cut edge, which reads as a lip of hair
-         hovering around the head — and meeting the skin at the line is what
-         makes a fade fade. */
-      const f=Math.max(0,Math.min(1,(y0-L)/BAND)), e=f*f*(3-2*f);
-      let gr=spec.grow*e;
-      /* CURL: clumps, not a smooth shell. The noise is keyed on the vertex
-         position SNAPPED to a grid, so every vertex in one clump gets the same
-         value and the surface stays closed; per-vertex noise tears it open
-         exactly the way unwelded normals did. */
-      if(spec.curl){
+      const y0=v.p[1];
+      let f=fadeAt(y0);
+      /* Above the line-up at the front the hair is full length and stops
+         dead — a line-up is cut, not faded. */
+      /* THE LINE-UP, which is two separate jobs that must not be tied
+         together.
+
+         SNAP: any vertex of a straddling triangle that falls below the
+         hairline on the front of the skull is pulled up onto the line.
+         Triangles are kept or dropped whole, so without this their lower
+         corners carry hair down over the forehead — and tying the snap to
+         the flat region alone put the fringe back over the eyebrows.
+
+         FULL LENGTH: only along the FLAT part of the line, the line-up
+         proper across the middle of the forehead. Applying it to the whole
+         front band handed the temple full-length hair at full darkness where
+         it hangs forward past the eye, which is why the fade read as a
+         mushroom however the band was tuned — it was being overridden. */
+      const L=lineAt(v.p[0],v.p[2]);
+      const flat=(LA+LB*v.p[2]-0.875*Math.abs(v.p[0]))>=spec.lineY-1e-6;
+      let snapY=null;
+      if(v.p[2]>ZCUT&&y0<L){ snapY=L; f=fadeAt(L); }
+      if(flat&&v.p[2]>ZCUT) f=1;
+      /* VOLUME ON TOP, TIGHT AT THE SIDES. Length cannot be uniform: with one
+         `grow` for the whole cap the sides stood as far off the skull as the
+         crown did and every cut read as a rounded mass. `tight` is how much
+         length survives on a vertical surface, so the shape follows the
+         normal — full on top, cropped down the sides, which is what a fade
+         with a curly top actually looks like. */
+      const up=Math.max(0,v.n[1]);
+      const shape=(spec.tight===undefined)?1:(spec.tight+(1-spec.tight)*up);
+      let gr=spec.grow*f*shape;
+      if(spec.curl&&f>0.02){
         const q=spec.clump;
         const s=Math.sin(Math.round(v.p[0]/q)*127.1+Math.round(v.p[1]/q)*311.7
                         +Math.round(v.p[2]/q)*74.7)*43758.5453;
-        gr+=spec.curl*((s-Math.floor(s))-0.35)*e;
+        gr+=spec.curl*((s-Math.floor(s))-0.35)*f*f*shape;
       }
-      let y=y0+v.n[1]*gr;
-      if(y0<L) y=L;
-      if(spec.yMax&&y>spec.yMax) y=spec.yMax;
+      /* Never exactly zero: the shell has to stay outside the skin or the two
+         surfaces z-fight across the whole faded area. */
+      gr=Math.max(gr,0.0010);
+      let y=(snapY!==null)?snapY:(y0+v.n[1]*gr);
       if(spec.cap&&y>spec.cap) y=spec.cap;
       pos.push(v.p[0]+v.n[0]*gr, y, v.p[2]+v.n[2]*gr);
       nrm.push(v.n[0],v.n[1],v.n[2]);
       if(v.u) uv.push(v.u[0],v.u[1]);
       for(let c=0;c<4;c++){ si.push(v.si[c]); sw.push(v.sw[c]); }
+      fade.push(f);
     });
   });
   if(!pos.length) return null;
@@ -1363,33 +1471,57 @@ function makeHairCap(head,spec,hex){
   if(uv.length) geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
   geo.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(si,4));
   geo.setAttribute('skinWeight',new THREE.Float32BufferAttribute(sw,4));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(new Float32Array(fade.length*3),3));
+  geo.userData.fade=Float32Array.from(fade);
+
   const mat=head.material.clone();
   mat.name='Hair';
-  mat.color.setHex(spec.tone?hairSideHex(hex):hex);
-  mat.userData.baseHex=mat.color.getHex();
+  mat.vertexColors=true;
+  mat.color.setHex(0xffffff);        // the colour lives in the vertex ramp
   const m=new THREE.SkinnedMesh(geo,mat);
-  /* Skin weights come straight off the head, so the cap rides the head bone
-     with no remapping at all — it is the same skeleton. */
   m.bind(head.skeleton,head.bindMatrix);
   m.frustumCulled=false;
   m.userData.cutSlot='hair';
-  m.userData.hairTone=spec.tone?1:0;
+  m.userData.hairCap=1;
+  recolorCap(m,hairHex,skinHex);
   return m;
+}
+
+/* Writes the hair->skin ramp into a cap's vertex colours. Called whenever
+   either colour changes, since the ramp is a blend BETWEEN the two and
+   neither can move on its own. */
+function recolorCap(mesh,hairHex,skinHex){
+  const geo=mesh&&mesh.geometry;
+  const f=geo&&geo.userData.fade, C=geo&&geo.attributes.color;
+  if(!f||!C) return false;
+  const hair=new THREE.Color(hairHex), skin=new THREE.Color(skinHex);
+  const c=new THREE.Color();
+  for(let i=0;i<f.length;i++){
+    c.copy(skin).lerp(hair,f[i]);
+    C.setXYZ(i,c.r,c.g,c.b);
+  }
+  C.needsUpdate=true;
+  mesh.userData.hairHex=hairHex; mesh.userData.skinHex=skinHex;
+  return true;
 }
 
 /* Wears a derived haircut. Returns true if anything was put on — `cap_bald`
    legitimately puts nothing on and still counts as worn. */
 function wearHairCap(host,partId,hex){
-  const specs=HAIR_CAPS[partId];
-  if(!host||!specs) return false;
+  if(!host||!(partId in HAIR_CAPS)) return false;
+  const spec=HAIR_CAPS[partId];
   let head=null, headSkin=null;
   host.traverse(o=>{ if(!head&&/_Head$/.test(o.name)) head=o; });
   host.traverse(o=>{ if(!headSkin&&o.isSkinnedMesh&&o.material&&o.material.name==='Skin'
     &&o.parent&&/_Head$/.test(o.parent.name)) headSkin=o; });
   if(!head||!headSkin) return false;
   slotMeshes(host,'hair').forEach(o=>{ if(o.parent) o.parent.remove(o); });
-  const col=(hex===undefined||hex===null)?0x1A1410:hex;
-  specs.forEach(s=>{ const m=makeHairCap(headSkin,s,col); if(m) head.add(m); });
+  if(!spec) return true;                                  // bald: nothing to add
+  /* The fade blends INTO the skin, so it needs the skin's actual colour —
+     read off the head that is on the body, not assumed. */
+  const skinHex=headSkin.material.color.getHex();
+  const m=makeHairCap(headSkin,spec,(hex===undefined||hex===null)?0x1A1410:hex,skinHex);
+  if(m) head.add(m);
   return true;
 }
 
@@ -1409,6 +1541,13 @@ function applyCuts(host,fit,done){
        its own skin with it, and a swap that resolves late would otherwise
        leave that skin at the donor's tone until the next repaint. */
     ['skin','shoes'].forEach(slot=>{ tintSlot(host,slot,tints[slot]); });
+    /* The fade ends in SKIN, so a skin change moves the bottom of the ramp.
+       Re-derive it from whatever the head is actually wearing now. */
+    let sk=null;
+    host.traverse(o=>{ if(!sk&&o.isMesh&&o.material&&o.material.name==='Skin'
+      &&o.parent&&/_Head$/.test(o.parent.name)) sk=o; });
+    if(sk) host.traverse(o=>{ if(o.userData&&o.userData.hairCap)
+      recolorCap(o,o.userData.hairHex||0x1A1410,sk.material.color.getHex()); });
     done&&done(changed); };
   CUT_SLOTS.forEach(slot=>{
     const cut=(typeof currentCut==='function')?currentCut(slot):null;

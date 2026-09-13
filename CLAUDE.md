@@ -933,55 +933,70 @@ Five things bite here, every one of them found by measuring:
 #### Haircuts that are DERIVED, not downloaded (`HAIR_CAPS` / `makeHairCap`)
 
 Nine of the fourteen hairstyles are computed from the character's own head at
-runtime. That is a deliberate answer to a real constraint, not a shortcut:
-
-**A fade cannot be downloaded, because there is nothing to model.** A bald
-fade, taper, line-up or buzz is a millimetre of hair hugging the skull, and
-all of its identity is in the HAIRLINE and the TWO TONES, not in a
-silhouette. Asset libraries ship silhouette hair — afros, locs, ponytails —
-because that is what can be modelled; nobody ships a fade, and a downloaded
-one would be cut to somebody else's skull anyway. (Checked: Sketchfab has a
-CC0 toon-dreadlocks model but its download API is 401 without a login, and
-itch.io needs a click-through, so neither can be fetched from here.)
+runtime, because **a fade cannot be downloaded — there is nothing to model.**
+A bald fade, taper, line-up or buzz is a millimetre of hair hugging the skull
+and all of its identity is in the HAIRLINE and the GRADIENT. Asset libraries
+ship silhouette hair (afros, locs, ponytails) because that is what can be
+modelled; nobody ships a fade, and a downloaded one would be cut to somebody
+else's skull anyway. (Checked: Sketchfab has a CC0 toon-dreadlocks model but
+its download API is 401 without a login, and itch.io needs a click-through.)
 
 So `makeHairCap()` takes the head's own skin mesh, pushes every vertex out
-along the surface by a few millimetres and cuts the result at a hairline.
-That fits by construction, on any head, and costs **zero download** — the
-nine cuts added ~20 KB of code and no assets at all.
+along the surface and shades the result. It fits any head by construction and
+costs **zero download** — nine cuts for about 20 KB of code.
 
-Measured on this rig, in head space: crown `y=1.826`, brow `1.715`, nape
-`~1.575`, and one local unit is about 0.94 m — so a millimetre of hair is
-`0.00106`, which is what `grow` is in. Five things bite, every one found by
-rendering it wrong first:
+**A FADE IS A GRADIENT, and the first version could never have looked like
+one.** It cut the scalp at a line and filled it with one flat colour, with a
+second flat piece on top — and rendered as a swim cap with a staircase along
+its bottom edge. Two flat tones separated by a hard line is the one thing a
+fade is not. So:
 
-- **The ears are part of the head mesh and stick out past the skull**, so the
-  faded sides painted both of them jet black. Measured at `|x|>0.086` between
-  `y` 1.660 and 1.775 and masked out.
-- **The head is 832 vertices** — triangles about a centimetre across — and a
-  line-up needs a far finer edge, so cutting the raw mesh gave a ragged fringe
-  of spikes. Two midpoint subdivision passes, on the triangles near the line
-  only.
-- **The head is faceted, so its normals are split per face.** Offsetting along
-  the raw per-vertex normal pushes adjacent triangles' shared corner in
-  different directions and the shell tears into separate facets — invisible at
-  buzz length, a crown of dark needles at anything longer. Averaging every
-  normal that shares a position welds it back into one surface.
-- **The short sides and the long top must TILE, not stack.** Letting both
-  cover the crown put two near-coincident surfaces a centimetre apart, which
-  z-fought into the same crown of needles from a completely different cause.
-  `yMax` stops the sides where `flatY` starts the top.
-- **Curl noise must be keyed on a SNAPPED position.** Hair reads as clumps,
-  not as a smooth shell, but per-vertex noise tears the cap open exactly the
-  way unwelded normals did. Rounding the position to a `clump`-sized grid
-  before hashing gives every vertex in a clump the same value, so the surface
-  stays closed.
+- **There is no bottom cut.** The cap covers the whole scalp and BOTH its
+  thickness and its colour ramp from full hair at the top to nothing at the
+  bottom, where it sits a fraction of a millimetre off the skin in exactly
+  the skin's own colour. No cut edge means no staircase.
+- **Colour lives in VERTEX COLOURS**, the only way to get a smooth ramp
+  without a custom shader (see "No custom GLSL, ever"). `recolorCap()`
+  rebuilds the ramp whenever the hair OR the skin colour moves, since it is a
+  blend between the two and neither end can move alone. Verified: at the zero
+  end it reads the skin colour and at the full end the hair colour, and both
+  track their pickers.
+- **The only cut is the FOREHEAD**, which is the line-up. Everywhere else the
+  hair just shortens into skin.
 
-Thickness also ramps to **zero at the hairline**: a fixed offset leaves the
-cap floating off the scalp at its cut edge, which reads as a lip of hair
-hovering around the head — and meeting the skin at the line is what makes a
-fade fade. The faded sides are the chosen hair colour multiplied by
-`HAIR_SIDE_MUL`, so a fade is two VALUES of one colour and the player never
-picks twice.
+Six things bite, every one found by rendering it wrong first:
+
+- **The hairline is FITTED to the pack's own hairstyle**, not invented.
+  Sampling the authored hair mesh's lowest vertex per (|x|, z) cell gives
+  `|x|=0` front 1.730 / back 1.625, `|x|=0.08` front 1.648 — so the line
+  falls going backwards AND steeply going outwards; the temple sits some 8cm
+  below the middle of the forehead. Three attempts guessed instead of
+  measuring: by depth (bald patch from the ear up), by surface normal (a bowl
+  cut over the eyes — a faceted head's welded normals do not separate
+  forehead from cheek), and a height-only line (full-length hair hanging off
+  the temple as a wedge).
+- **The face boundary is `z > 0.088`**, measured: every front-facing skin
+  vertex sits beyond it.
+- **SNAP and FULL-LENGTH are two different jobs.** Straddling triangles get
+  their low corners snapped onto the line, or the fringe hangs over the
+  eyebrows; full length applies only along the FLAT part of the line, or the
+  temple is forced dark and no amount of fade tuning helps because it is
+  being overridden.
+- **Weld the normals**, or the faceted shell tears into loose facets.
+- **`tight` crops the sides.** One `grow` for the whole cap stood the sides
+  as far off the skull as the crown and every cut read as a rounded mass;
+  length now follows the normal, full on top and cropped down the sides.
+- **Subdivision must be UNIFORM.** Two passes everywhere. Refining only the
+  band around the line-up looks like the obvious saving and is not: fine
+  triangles beside coarse ones meet at T-junctions and crack open along the
+  seam. Three passes over the whole scalp gave a 45,870-vertex haircut on a
+  ~10,000-vertex character; two gives 11,592, and the crisp line-up comes
+  from the snap rather than from triangle count.
+
+Scale, measured: the head is 0.327 local units for roughly 17cm, so a
+millimetre of hair is about 0.0019. Fade bands are short and sit high — a
+first pass spread them over 7cm of scalp and the result read as hair softly
+petering out rather than as a fade.
 
 #### `posedBounds()` — and why `Box3` was sizing every character wrong
 
