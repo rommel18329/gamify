@@ -1023,6 +1023,57 @@ and it rendered a 300x260 buffer into a box that was neither. `fitPreview()`
 re-reads the host's real box every frame and resizes only when it changes,
 which also covers rotating the phone.
 
+#### The BUILD (normal / oversized), and the FACE
+
+Two more dimensions on the wardrobe, both **derived** rather than shipped,
+for the same reason the haircuts are.
+
+**The build is a fit, not a garment.** 2026 oversized is the same tee cut
+boxy, so rather than shipping every top and bottom twice, `puffGeometry()`
+inflates the normal one: vertices pushed out along the surface and the hem
+dropped, which is what a bigger size does to a pattern. `BOXY` holds the per
+slot numbers (tops inflate more and drop further than bottoms). Three things
+matter here:
+
+- **Weld the normals first**, exactly as `makeHairCap()` does and for the
+  identical measured reason — these meshes are faceted, and offsetting along
+  raw per-vertex normals tears the garment into loose facets.
+- **Only the CLOTH inflates.** A top carries the arm skin with it and the
+  hemmed shorts carry a bare shin; puffing those would inflate the body
+  inside the clothes rather than the clothes. The modifier is aimed at
+  `def.mat` alone.
+- **The build belongs in the geometry cache key** (`part|mesh|build`).
+  Without it the first fit worn is handed back for the other one, and the
+  boxy tee arrives fitted.
+
+**The face is one mesh reshaped, because the pack has exactly one face.**
+Checked across all eleven characters: every head carries the IDENTICAL
+48-vertex `Eye` mesh. There is no second face in the pack to source — anime
+or otherwise — and no face TEXTURE anywhere in this project to swap for one
+(these materials are flat colours; see "Textures are multiply maps only").
+So `FACE_SHAPES` rescales the eyes, which is what actually reads as a
+different face at this art style, and nudges the brows to match. The pair
+lives in ONE mesh, so each eye is scaled about its OWN centroid — scaling
+about the face slides them apart. `applyFace()` keeps the untouched geometry
+on the mesh in `userData.faceOrig`, so "As exported" restores the real thing
+rather than re-deriving an approximation of it, and it is re-applied at the
+END of `applyCuts()` because a head that arrives with a cut brings its own
+untouched eyes.
+
+**Shoes are a cut slot now**, and `shoes_court` is a white chunky low-top:
+Casual_2's trainer with the upper tinted white and the sole puffed by the
+same `puffGeometry()`. Shape only, no marking of any kind — the rule the
+Civic EK and the colmado signage already follow, since a silhouette is not a
+trademark but a logo is. It carries a `defaultTint`, which is the one
+exception to colour inheritance: every other cut rightly inherits the
+outgoing garment's colour, but the entire point of this pair is that they
+are white, and inheriting handed back a blue pair.
+
+**Every hairstyle is free.** They were priced when they were downloads; nine
+of the fourteen are now derived at zero cost, and gating a haircut behind
+cash while the colour wheel next to it is free was an inconsistency rather
+than an economy. The prices stay on the clothes.
+
 #### Colour: a picker per slot, and why the swatches are free
 
 `TINT_SLOTS` is `skin / hair / top / bottom / shoes`, and `tintSlot()` is one

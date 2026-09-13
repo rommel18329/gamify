@@ -817,13 +817,25 @@ const GARMENT_PARTS={
   hair_curls:    {slot:'hair', derive:'cap_curls'},
   hair_afro:     {slot:'hair', derive:'cap_afro'},
   hair_coils:    {slot:'hair', derive:'cap_coils'},
-  hair_hightop:  {slot:'hair', derive:'cap_hightop'}
+  hair_hightop:  {slot:'hair', derive:'cap_hightop'},
+
+  /* SHOES. Casual_2's are a low-top trainer with a separate sole, which is
+     what makes a chunky white pair possible: tint the upper white and puff
+     the sole. Shape only and no marking of any kind — the same rule the
+     Civic EK and the colmado signage follow, since a silhouette is not a
+     trademark but a logo is. */
+  shoes_stock: {slot:'shoes', src:'hoodie', node:'Casual_Feet',  mat:'Purple'},
+  /* defaultTint because the point of this pair IS that they are white —
+     inheriting the outgoing shoe's colour, which is what every other cut
+     rightly does, handed back a blue pair. */
+  shoes_court: {slot:'shoes', src:'casual', node:'Casual2_Feet', mat:'Red_Dark',
+                sole:'White', solePuff:.010, defaultTint:0xF2F0EA}
 };
 /* Which node names a character's own top/bottom already go by. Every model in
    the pack follows <Character>_Body / _Legs (the Farmer calls its bottom
    _Pants), so this matches the character you start in as well as anything
    worn over it. */
-const CUT_SLOT_RE={ top:/_Body$/, bottom:/_(Legs|Pants|Shorts)$/, hair:null };
+const CUT_SLOT_RE={ top:/_Body$/, bottom:/_(Legs|Pants|Shorts)$/, shoes:/_Feet$/, hair:null };
 /* Material names that are the BODY, not the clothes — used when reading a
    garment's colour off a node whose `mat` we don't know (the character's own
    original top/bottom, before any cut has been worn). */
@@ -888,7 +900,7 @@ function loadGarment(partId,done){
    The remapped geometry is cached per part, so wearing a cut twice (a preview
    repaint, a second ENTER) re-uses one buffer instead of rebuilding it. */
 const GARMENT_GEO={};
-function bindGarment(mesh,donorSkel,hostSkel,key){
+function bindGarment(mesh,donorSkel,hostSkel,key,mod){
   let geo=GARMENT_GEO[key];
   if(!geo){
     geo=mesh.geometry.clone();
@@ -905,6 +917,10 @@ function bindGarment(mesh,donorSkel,hostSkel,key){
       for(let i=0;i<arr.length;i++){ const m=map[arr[i]]; arr[i]=m<0?0:m; }
       geo.setAttribute('skinIndex',new THREE.BufferAttribute(arr,4));
     }
+    /* Any reshaping happens ONCE, here, and is cached with the geometry —
+       re-deriving an oversized fit on every repaint would rebuild the mesh
+       under the player's finger. */
+    if(mod) geo=mod(geo)||geo;
     GARMENT_GEO[key]=geo;
   }
   mesh.geometry=geo;
@@ -966,8 +982,23 @@ function wearCutNow(host,slot,partId,donorScene,tint){
     if(def.mats&&def.mats.indexOf(o.material&&o.material.name)<0) return;
     wanted.push(o);
   });
+  /* The build is part of the geometry's identity, so it belongs in the cache
+     key — without it the first fit worn would be handed back for the other. */
+  const build=(typeof currentBuild==='function')?currentBuild():'normal';
+  const boxy=(build==='boxy')&&BOXY[slot];
   wanted.forEach(o=>{
-    bindGarment(o,donorSkel,hostSkel,partId+'|'+o.name);
+    const mname=o.material&&o.material.name;
+    const mod=geo=>{
+      /* The oversized build inflates the CLOTH only. A top carries the arm
+         skin with it and the legs carry a bare shin — puffing those would
+         inflate the body inside the clothes, not the clothes. */
+      if(boxy&&mname===def.mat) return puffGeometry(geo,boxy);
+      /* A chunky sole is the same operation aimed at one material. */
+      if(def.sole&&mname===def.sole)
+        return puffGeometry(geo,{puff:def.solePuff,hem:0,band:1});
+      return null;
+    };
+    bindGarment(o,donorSkel,hostSkel,partId+'|'+o.name+'|'+build,mod);
     o.userData.sharedGeo=true;             // geometry is GARMENT_GEO's, not this clone's
     o.material=Array.isArray(o.material)?o.material.map(m=>m.clone()):o.material.clone();
     (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
@@ -977,6 +1008,8 @@ function wearCutNow(host,slot,partId,donorScene,tint){
          franela sleeveless at all), so wearing one straight from the donor
          file changed the character's skin tone along with the shirt. */
       if(inheritMap[m.name]!==undefined) m.color.setHex(inheritMap[m.name]);
+      if(def.sole&&m.name===def.sole&&def.defaultTint!==undefined){
+        m.userData.baseHex=def.defaultTint; m.color.setHex(def.defaultTint); return; }
       if(m.name!==def.mat) return;
       /* baseHex is what this garment sits at when NO colourway is chosen, and
          that is the colour it inherited -- not the donor file's own export.
@@ -984,8 +1017,8 @@ function wearCutNow(host,slot,partId,donorScene,tint){
          (applyCuts runs again on every slider input, and tintCut() resets an
          untinted slot to baseHex) quietly undo the inheritance one frame
          later: the shorts changed colour by themselves after a repaint. */
-      m.userData.baseHex=(inherited!==null&&inherited!==undefined)
-        ? inherited : m.color.getHex();
+      m.userData.baseHex=(def.defaultTint!==undefined) ? def.defaultTint
+        : (inherited!==null&&inherited!==undefined) ? inherited : m.color.getHex();
       const c=(tint!==undefined&&tint!==null)?tint:m.userData.baseHex;
       m.color.setHex(c); m.userData.tinted=(tint!==undefined&&tint!==null);
     });
@@ -1008,6 +1041,133 @@ function wearCutNow(host,slot,partId,donorScene,tint){
   return true;
 }
 
+
+
+
+/* ---- FACES --------------------------------------------------------------
+   Every head in the Quaternius pack carries the IDENTICAL 48-vertex `Eye`
+   mesh — checked across all eleven characters — so there is no second face
+   anywhere in the pack to source, anime or otherwise. Nor is there a face
+   TEXTURE to swap: these materials are flat colours, and this project paints
+   no face maps (see "Textures are multiply maps only").
+
+   What the eye mesh does give is a shape to work with. Each entry rescales
+   the eyes about their OWN centres — anime reads as eye size and slant more
+   than anything else — and nudges the brows to match. Derived from the
+   pack's mesh, not drawn.
+
+   Measured: the eyes sit at y 1.684-1.709, x +/-0.057, z 0.130-0.158, and
+   the pair lives in one mesh, so each eye is scaled about its own centroid
+   rather than about the face, or they would slide apart. */
+const FACE_SHAPES={
+  face_stock: null,
+  face_wide:  {eye:{x:1.34,y:1.70,z:1.0, dy:.002}, brow:{y:1.25, dy:.006}},
+  face_sharp: {eye:{x:1.30,y:0.72,z:1.0, dy:.001}, brow:{y:0.85, dy:.004}},
+  face_soft:  {eye:{x:1.18,y:1.42,z:1.0, dy:-.002},brow:{y:1.10, dy:.003}},
+  face_stoic: {eye:{x:0.92,y:0.78,z:1.0, dy:.000}, brow:{y:0.80, dy:.000}},
+  face_bright:{eye:{x:1.46,y:1.92,z:1.0, dy:.003}, brow:{y:1.30, dy:.008}}
+};
+/* Rescales one mesh's vertices about each SIDE's own centroid. */
+function reshapeFacePart(mesh,spec){
+  if(!mesh||!spec) return null;
+  const src=mesh.userData.faceOrig||mesh.geometry;
+  mesh.userData.faceOrig=src;
+  const geo=src.clone(), P=geo.attributes.position;
+  const c={};
+  [1,-1].forEach(sg=>{ let sx=0,sy=0,sz=0,n=0;
+    for(let i=0;i<P.count;i++){ const x=P.getX(i); if((x<0?-1:1)!==sg) continue;
+      sx+=x; sy+=P.getY(i); sz+=P.getZ(i); n++; }
+    c[sg]=n?{x:sx/n,y:sy/n,z:sz/n}:{x:0,y:0,z:0}; });
+  for(let i=0;i<P.count;i++){
+    const x=P.getX(i), a=c[x<0?-1:1];
+    P.setXYZ(i, a.x+(x-a.x)*spec.x,
+                a.y+(P.getY(i)-a.y)*spec.y+(spec.dy||0),
+                a.z+(P.getZ(i)-a.z)*spec.z);
+  }
+  P.needsUpdate=true;
+  geo.computeBoundingSphere();
+  return geo;
+}
+/* Applies a face to whichever head is on the body. Reversible: the untouched
+   geometry is kept on the mesh, so picking "As exported" really restores it
+   rather than re-deriving an approximation of it. */
+function applyFace(host,faceId){
+  if(!host) return false;
+  const spec=FACE_SHAPES[faceId!==undefined?faceId:'face_stock'];
+  let eye=null, brow=null;
+  host.traverse(o=>{
+    if(!o.isMesh||!o.material||!o.parent||!/_Head$/.test(o.parent.name)) return;
+    if(o.material.name==='Eye') eye=o;
+    if(o.material.name==='Eyebrows') brow=o;
+  });
+  if(!eye) return false;
+  if(!spec){
+    if(eye.userData.faceOrig) eye.geometry=eye.userData.faceOrig;
+    if(brow&&brow.userData.faceOrig) brow.geometry=brow.userData.faceOrig;
+    return true;
+  }
+  const g1=reshapeFacePart(eye,spec.eye);   if(g1) eye.geometry=g1;
+  if(brow&&spec.brow){
+    const g2=reshapeFacePart(brow,{x:1,y:spec.brow.y,z:1,dy:spec.brow.dy});
+    if(g2) brow.geometry=g2;
+  }
+  return true;
+}
+function currentFace(){
+  const f=(S.person&&S.person.character&&S.person.character.fit)||{};
+  return FACE_SHAPES[f.face]!==undefined?f.face:'face_stock';
+}
+
+/* ---- FIT: normal vs oversized ------------------------------------------
+   2026 oversized is a BUILD, not a garment: the same tee in a boxy cut.
+   Rather than shipping every top twice, the boxy version is derived from the
+   normal one by inflating it — vertices pushed out along the surface and the
+   hem dropped, which is exactly what a bigger size does to a pattern.
+
+   Normals are welded first for the same measured reason makeHairCap() welds
+   them: these meshes are faceted, so offsetting along raw per-vertex normals
+   pushes adjacent triangles' shared corner apart and the garment tears into
+   loose facets. */
+const FIT_BUILDS=['normal','boxy'];
+/* Per slot: how far to inflate, how far to drop the hem, and over what height
+   band the drop eases in. Tuned against the real meshes, whose torso garment
+   runs y 1.00-1.57 and whose legs run 0.13-1.05. */
+const BOXY={
+  top:    {puff:.032, hem:.085, band:.18},
+  bottom: {puff:.026, hem:.030, band:.20}
+};
+function puffGeometry(geo,opts){
+  const P=geo.attributes.position, N=geo.attributes.normal;
+  if(!P||!N) return geo;
+  const out=geo.clone();
+  const OP=out.attributes.position;
+  const key=i=>P.getX(i).toFixed(4)+','+P.getY(i).toFixed(4)+','+P.getZ(i).toFixed(4);
+  const wn={};
+  for(let i=0;i<P.count;i++){ const k=key(i);
+    const a=wn[k]||(wn[k]=[0,0,0]);
+    a[0]+=N.getX(i); a[1]+=N.getY(i); a[2]+=N.getZ(i); }
+  Object.keys(wn).forEach(k=>{ const a=wn[k];
+    const L=Math.hypot(a[0],a[1],a[2])||1; a[0]/=L; a[1]/=L; a[2]/=L; });
+  let lo=Infinity, hi=-Infinity;
+  for(let i=0;i<P.count;i++){ const y=P.getY(i); if(y<lo)lo=y; if(y>hi)hi=y; }
+  for(let i=0;i<P.count;i++){
+    const n=wn[key(i)], y=P.getY(i);
+    /* The hem drops, the shoulders do not — an oversized tee gets longer and
+       squarer at the bottom while still sitting on the same shoulders. */
+    const t=Math.max(0,Math.min(1,(y-lo)/Math.max(opts.band,1e-4)));
+    const drop=opts.hem*(1-(t*t*(3-2*t)));
+    OP.setXYZ(i, P.getX(i)+n[0]*opts.puff,
+                 y+n[1]*opts.puff-drop,
+                 P.getZ(i)+n[2]*opts.puff);
+  }
+  OP.needsUpdate=true;
+  out.computeBoundingSphere();
+  return out;
+}
+function currentBuild(){
+  const f=(S.person&&S.person.character&&S.person.character.fit)||{};
+  return FIT_BUILDS.indexOf(f.build)>=0?f.build:'normal';
+}
 
 /* The REAL vertical extent of a posed character, sampled through
    applyBoneTransform.
@@ -1234,6 +1394,9 @@ function applyCuts(host,fit,done){
   host.userData.worn=host.userData.worn||{};
   let pending=CUT_SLOTS.length, changed=false;
   const finish=()=>{ if(--pending>0) return;
+    /* The face last: a head that arrives with a cut brings its own untouched
+       eyes, so the shape has to be re-applied once everything has landed. */
+    if(typeof applyFace==='function') applyFace(host,(fit&&fit.face));
     /* Again after the garments have actually landed: a newly worn top brings
        its own skin with it, and a swap that resolves late would otherwise
        leave that skin at the donor's tone until the next repaint. */

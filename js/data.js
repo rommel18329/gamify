@@ -1295,7 +1295,7 @@ const DRIP_FITS={
    Locking reuses fitLock()/buyFit() unchanged -- they read .tier/.price/.need
    and nothing else, so a cut and a colourway cannot drift apart on what a
    gate means. */
-const CUT_SLOTS=['top','bottom','hair'];
+const CUT_SLOTS=['top','bottom','shoes','hair'];
 const DRIP_CUTS={
   top:[
     {id:'cut_hoodie',  name:'Hoodie',        tier:'free', part:'hoodie_top'},
@@ -1310,6 +1310,11 @@ const DRIP_CUTS={
     {id:'cut_jeans',   name:'Jeans',         tier:'cash', price:300, part:'jeans'},
     {id:'cut_baggy',   name:'Baggy pants',   tier:'cash', price:420, part:'baggy'}
   ],
+  shoes:[
+    {id:'sho_c_stock', name:'Trainers',        tier:'free', part:'shoes_stock'},
+    /* Shape only, no marking of any kind — see GARMENT_PARTS in models.js. */
+    {id:'sho_c_court', name:'White court low', tier:'free', part:'shoes_court'}
+  ],
   hair:[
     /* The first nine are DERIVED from the character's own head (see HAIR_CAPS
        in models.js) — no download, and they fit any head. The rest are real
@@ -1317,20 +1322,44 @@ const DRIP_CUTS={
     {id:'hair_c_stock',  name:'Short curls',    tier:'free', part:'hair_stock'},
     {id:'hair_c_bald',   name:'Bald',           tier:'free', part:'hair_bald'},
     {id:'hair_c_buzz',   name:'Buzz',           tier:'free', part:'hair_buzz'},
-    {id:'hair_c_lowfade',name:'Low fade',       tier:'cash', price:150, part:'hair_lowfade'},
-    {id:'hair_c_taper',  name:'Taper fade',     tier:'cash', price:150, part:'hair_taper'},
-    {id:'hair_c_curls',  name:'Curls',          tier:'cash', price:150, part:'hair_curls'},
-    {id:'hair_c_curlfade',name:'Curly fade',    tier:'cash', price:200, part:'hair_curlfade'},
-    {id:'hair_c_coils',  name:'Coils',          tier:'cash', price:200, part:'hair_coils'},
-    {id:'hair_c_afro',   name:'Afro',           tier:'cash', price:240, part:'hair_afro'},
-    {id:'hair_c_hightop',name:'High-top fade',  tier:'cash', price:260, part:'hair_hightop'},
-    {id:'hair_c_waves',  name:'Waves',          tier:'cash', price:150, part:'hair_waves'},
-    {id:'hair_c_fade',   name:'Side part',      tier:'cash', price:150, part:'hair_fade'},
-    {id:'hair_c_long',   name:'Long + beard',   tier:'cash', price:260, part:'hair_long'},
-    {id:'hair_c_mohawk', name:'Mohawk',         tier:'earned', part:'hair_mohawk', need:{streak:14},
-       why:'a 14-day streak, ever'}
+    {id:'hair_c_lowfade',name:'Low fade',       tier:'free', part:'hair_lowfade'},
+    {id:'hair_c_taper',  name:'Taper fade',     tier:'free', part:'hair_taper'},
+    {id:'hair_c_curls',  name:'Curls',          tier:'free', part:'hair_curls'},
+    {id:'hair_c_curlfade',name:'Curly fade',    tier:'free', part:'hair_curlfade'},
+    {id:'hair_c_coils',  name:'Coils',          tier:'free', part:'hair_coils'},
+    {id:'hair_c_afro',   name:'Afro',           tier:'free', part:'hair_afro'},
+    {id:'hair_c_hightop',name:'High-top fade',  tier:'free', part:'hair_hightop'},
+    {id:'hair_c_waves',  name:'Waves',          tier:'free', part:'hair_waves'},
+    {id:'hair_c_fade',   name:'Side part',      tier:'free', part:'hair_fade'},
+    {id:'hair_c_long',   name:'Long + beard',   tier:'free', part:'hair_long'},
+    {id:'hair_c_mohawk', name:'Mohawk',         tier:'free', part:'hair_mohawk'}
   ]
 };
+/* THE BUILD. 2026 oversized is a fit, not a garment: the same tee cut boxy.
+   Kept as one toggle rather than doubling every entry in DRIP_CUTS — the
+   boxy version is derived from the normal one (puffGeometry in models.js),
+   so a second copy of every top and bottom would be dead weight. */
+/* FACES. Derived from the pack's own eye mesh — there is no second face in
+   it to source (all eleven heads share one 48-vertex Eye), and no face
+   texture anywhere in this project to swap. See FACE_SHAPES in models.js. */
+const DRIP_FACES=[
+  {id:'face_stock',  name:'As exported', tier:'free'},
+  {id:'face_wide',   name:'Wide',        tier:'free'},
+  {id:'face_bright', name:'Bright',      tier:'free'},
+  {id:'face_soft',   name:'Soft',        tier:'free'},
+  {id:'face_sharp',  name:'Sharp',       tier:'free'},
+  {id:'face_stoic',  name:'Stoic',       tier:'free'}
+];
+function faceEntry(id){
+  return DRIP_FACES.find(function(f){ return f.id===id; })||null;
+}
+const DRIP_BUILDS=[
+  {id:'build_normal', name:'Normal',           tier:'free', build:'normal'},
+  {id:'build_boxy',   name:'Oversized / boxy', tier:'free', build:'boxy'}
+];
+function buildEntry(id){
+  return DRIP_BUILDS.find(function(b){ return b.id===id; })||null;
+}
 function cutEntry(slot,id){
   return (DRIP_CUTS[slot]||[]).find(function(c){ return c.id===id; })||null;
 }
